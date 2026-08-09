@@ -797,17 +797,42 @@ def render_word_diff(old_text: str, new_text: str, diff_view) -> None:
                     diff_text.append("".join(new_words[wj1:wj2]), style="black on green")
             
             diff_view.write(diff_text)
-
 def copy_to_clipboard(text: str) -> bool:
-    """Copies text to the clipboard using pyperclip."""
-    try:
-        pyperclip.copy(text)
+    """Copies text to the clipboard, routing through the Termux backend on mobile.
+
+    Android's clipboard write path has a practical size ceiling, so oversized
+    prompts are staged to a file rather than failing silently.
+    """
+    from combinecopy.mobile.clipboard import copy_text, stage_outbound, CLIPBOARD_SIZE_LIMIT
+    from combinecopy.mobile.env import is_termux
+
+    if copy_text(text):
         return True
-    except Exception as e:
-        console.print(f"[bold red]Error copying to clipboard:[/bold red] {e}")
-        return False
+
+    if is_termux():
+        path = stage_outbound(text)
+        if path:
+            size_kb = len(text.encode("utf-8", errors="surrogateescape")) / 1024
+            console.print(
+                f"[yellow]Prompt is too large for the Android clipboard "
+                f"({size_kb:.0f} KB > {CLIPBOARD_SIZE_LIMIT // 1024} KB).[/yellow]"
+            )
+            console.print(f"[bold cyan]Staged to:[/bold cyan] {path}")
+            console.print(f"[dim]Share it out with:[/dim] termux-share -a send {path}")
+            return False
+
+    console.print("[bold red]Error copying to clipboard.[/bold red]")
+    return False
+
+
 def copy_file_to_clipboard(filepath: str) -> bool:
-    """Copies a file to the clipboard using PowerShell so it can be pasted as an attachment."""
+    """Copies a file object to the clipboard. Windows only - it relies on PowerShell."""
+    if os.name != "nt":
+        console.print(
+            "[yellow]--file clipboard attachments are Windows-only; "
+            "falling back to plain text.[/yellow]"
+        )
+        return False
     try:
         abs_path = os.path.abspath(filepath)
         subprocess.run(["powershell", "-command", f"Set-Clipboard -Path '{abs_path}'"], check=True)

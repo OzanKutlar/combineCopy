@@ -53,6 +53,8 @@ def _write_text_preserving(path: str, text: str, original_newline: str | None = 
         f.write(text)
 from combinecopy.prompts import build_prompt
 from combinecopy.vcs_tfs import tfs_checkout, tfs_add, tfs_delete, tfs_checkin
+from combinecopy.mobile.inbox import PayloadInbox, read_latest_dropped_file, INBOX_DIR
+from combinecopy.mobile.clipboard import read_text_once
 class RehabScreen(ModalScreen[bool]):
     CSS = """
     RehabScreen {
@@ -220,27 +222,37 @@ class RehabScreen(ModalScreen[bool]):
         blocks = self.file_obj.get("search_replace", [])
         if blocks:
             line_num = find_line_number(self.original_text, blocks[0].get("search", ""))
+        from combinecopy.mobile.env import resolve_editor, editor_display_name, is_terminal_editor
 
-        npp_path = shutil.which("notepad++") or shutil.which("notepad++.exe")
-        if not npp_path:
-            possible_paths = [
-                r"C:\Program Files\Notepad++\notepad++.exe",
-                r"C:\Program Files (x86)\Notepad++\notepad++.exe"
-            ]
-            for p in possible_paths:
-                if os.path.exists(p):
-                    npp_path = p
-                    break
-        
+        editor = resolve_editor()
+        if not editor:
+            self.notify("No editor found. Try: pkg install micro", severity="error")
+            return
+
+        base = os.path.basename(editor[0]).lower()
+        argv = list(editor)
+        if "notepad++" in base:
+            argv.append(f"-n{line_num}")
+        elif base.split(".")[0] in ("micro", "nano", "vi", "vim", "nvim"):
+            argv.append(f"+{line_num}")
+        argv.append(self.temp_human_path)
+
         try:
-            if npp_path:
-                subprocess.Popen([npp_path, f"-n{line_num}", self.temp_human_path])
-            elif os.name == 'nt':
-                subprocess.Popen(["notepad", self.temp_human_path])
+            if is_terminal_editor(editor[0]):
+                # Terminal editors take over the TTY, so the TUI must step aside.
+                suspend = getattr(self.app, "suspend", None)
+                if suspend is not None:
+                    with suspend():
+                        subprocess.run(argv, check=False)
+                else:
+                    subprocess.run(argv, check=False)
+                self.notify(
+                    f"Returned from {editor_display_name()}. Verify in Meld when ready.",
+                    severity="information",
+                )
             else:
-                cmd = "xdg-open" if sys.platform.startswith("linux") else "open"
-                subprocess.Popen([cmd, self.temp_human_path])
-            self.notify("Editor opened. Edit your copy, save, then Verify in Meld.", severity="info")
+                subprocess.Popen(argv)
+                self.notify("Editor opened. Edit your copy, save, then Verify in Meld.", severity="info")
         except Exception as e:
             self.notify(f"Failed to open editor: {e}", severity="error")
 
@@ -1555,9 +1567,32 @@ class AutoAgentApp(App):
         border-bottom: solid #5a4d45;
         margin-bottom: 1;
     }
+    Screen.mobile #layout {
+        layout: vertical;
+    }
+    Screen.mobile #sidebar {
+        width: 100%;
+        height: 40%;
+        border-right: none;
+        border-bottom: solid #5a4d45;
+    }
+    Screen.mobile #main-area {
+        width: 100%;
+        height: 60%;
+        padding: 0 1;
+    }
+    Screen.mobile #global-action-bar,
+    Screen.mobile #file-action-bar {
+        display: none;
+    }
+    Screen.mobile #ai-markdown {
+        max-height: 25%;
+    }
     """
     BINDINGS = [
         Binding("escape", "quit", "Quit"),
+        Binding("v", "paste_buffer", "Paste Payload"),
+        Binding("V", "paste_editor", "Paste via Editor"),
         Binding("a", "apply_file", "Apply File"),
         Binding("t", "practice", "Practice (Rehab)"),
         Binding("p", "partial_add", "Partial Add"),
@@ -1572,12 +1607,15 @@ class AutoAgentApp(App):
         Binding("f", "fix_json", "Fix JSON"),
     ]
     TITLE = "CombineCopy — Auto Agent Listener"
-    def __init__(self, root_dir: str, known_files: list[str] | None = None, revert_mode: bool = False, ignore_initial_clipboard: bool = False, web_mode: bool = False, tfs_mode: bool = False, xml_mode: bool = False, consult_mode: bool = False, rehab_mode: bool = False):
+    def __init__(self, root_dir: str, known_files: list[str] | None = None, revert_mode: bool = False, ignore_initial_clipboard: bool = False, web_mode: bool = False, tfs_mode: bool = False, xml_mode: bool = False, consult_mode: bool = False, rehab_mode: bool = False, mobile_mode: bool = False, inbox=None):
         super().__init__()
         self.root_dir = root_dir
         self.known_files = known_files or []
         self.revert_mode = revert_mode
-        self.web_mode = web_mode
+        self.mobile_mode = mobile_mode
+        self.inbox = inbox if inbox is not None else (PayloadInbox() if mobile_mode else None)
+        # Web macro mode needs a global hotkey hook, which is unavailable on Termux.
+        self.web_mode = web_mode and not mobile_mode
         self.tfs_mode = tfs_mode
         self.xml_mode = xml_mode
         self.consult_mode = consult_mode
@@ -1599,11 +1637,54 @@ class AutoAgentApp(App):
             self.title = "CombineCopy — Auto Agent Listener (TFS MODE)"
         if self.rehab_mode:
             self.title = "CombineCopy — Auto Agent Listener (REHAB MODE)"
+        if self.mobile_mode:
+            self.title = "CombineCopy — Mobile Listener"
 
     def action_reload(self) -> None:
+        if self.mobile_mode:
+            self._reload_mobile()
+            return
         self.last_clipboard = ""
         self.query_one("#status-label", Label).update("[bold yellow]Reloading clipboard...[/bold yellow]")
         self.check_clipboard()
+
+    def _reload_mobile(self) -> None:
+        """Manual ingest: inbox drop first, then one deliberate clipboard read."""
+        text = read_latest_dropped_file()
+        source = "inbox drop"
+        if not text:
+            text = read_text_once()
+            source = "clipboard"
+        if not text:
+            self.notify(
+                f"Nothing in {INBOX_DIR} or on the clipboard. Press 'v' to paste manually.",
+                severity="warning",
+            )
+            return
+        self.notify(f"Ingested {len(text)} chars from {source}.", severity="information")
+        self.last_clipboard = ""
+        self._process_incoming(text)
+
+    def action_paste_buffer(self) -> None:
+        self._open_paste_screen(auto_editor=False)
+
+    def action_paste_editor(self) -> None:
+        self._open_paste_screen(auto_editor=True)
+
+    def _open_paste_screen(self, auto_editor: bool = False, initial_text: str = "") -> None:
+        if getattr(self, "is_loading_payload", False):
+            return
+        from combinecopy.tui.paste import PasteBufferScreen
+        self.app.push_screen(
+            PasteBufferScreen(initial_text=initial_text, auto_editor=auto_editor),
+            callback=self._on_paste_result,
+        )
+
+    def _on_paste_result(self, text: str | None) -> None:
+        if not text:
+            return
+        self.last_clipboard = ""
+        self._process_incoming(text.strip())
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -1628,8 +1709,18 @@ class AutoAgentApp(App):
                 yield Markdown("*(AI output will appear here)*", id="ai-markdown")
                 yield RichLog(id="diff-view", highlight=True)
         yield Footer()
-
     def on_mount(self) -> None:
+        if self.mobile_mode:
+            self.screen.add_class("mobile")
+            self.query_one("#status-label", Label).update("Press 'v' to paste, 'V' for editor")
+            # The mobile loop only drains an in-process queue, so 1s is plenty and
+            # avoids spinning the CPU on phone battery.
+            self.polling_timer = self.set_interval(1.0, self.check_clipboard)
+            self.query_one("#diff-view", RichLog).write(
+                "No payload loaded. Press 'v' to open the paste buffer, 'V' for the editor."
+            )
+            self.call_after_refresh(self.action_paste_buffer)
+            return
         if self.ignore_initial_clipboard:
             try:
                 self.last_clipboard = pyperclip.paste().strip()
@@ -1637,13 +1728,32 @@ class AutoAgentApp(App):
                 pass
         self.polling_timer = self.set_interval(0.5, self.check_clipboard)
         self.query_one("#diff-view", RichLog).write("Select a file to view diffs.")
-
     def check_clipboard(self) -> None:
+        """Polling entry point. Selects the ingest source for the current mode."""
+        if self.mobile_mode:
+            # Android restricts clipboard reads to the focused app, so the mobile
+            # loop never touches it. Payloads arrive through the PayloadInbox.
+            if self.inbox is None:
+                return
+            item = self.inbox.drain()
+            if item:
+                self._process_incoming(item.get("text", ""))
+            return
         try:
             content = pyperclip.paste().strip()
-            if not content or content == self.last_clipboard:
+        except Exception:
+            return
+        if not content or content == self.last_clipboard:
+            return
+        self._process_incoming(content)
+
+    def _process_incoming(self, content: str) -> None:
+        """Parses one candidate payload string, whatever source it came from."""
+        try:
+            content = (content or "").strip()
+            if not content:
                 return
-                
+
             # Check for consult results FIRST if we are consulting
             if getattr(self, 'is_consulting', False):
                 answers = extract_consult_answers(content)
@@ -2348,10 +2458,15 @@ class AutoAgentApp(App):
         file_obj["_warnings"].append(f"Human corrected search block {block_idx + 1}.")
         self._validate_file_obj(file_obj)
         self.refresh_file_list()
-
     def action_fix_json(self) -> None:
         btn = self.query_one("#btn-fix-json", Button)
         if btn.disabled or not hasattr(self, 'broken_json_content') or not self.broken_json_content:
+            return
+        if self.mobile_mode:
+            # A terminal editor cannot be launched from the worker thread below
+            # without corrupting the TUI, so mobile reuses the paste buffer's
+            # suspend-based handoff instead.
+            self._open_paste_screen(auto_editor=True, initial_text=self.broken_json_content)
             return
         btn.disabled = True
         thread = threading.Thread(target=self._fix_json_worker, args=(self.broken_json_content,), daemon=True)
@@ -2361,25 +2476,13 @@ class AutoAgentApp(App):
         fd, temp_path = tempfile.mkstemp(suffix=".json", text=True)
         with os.fdopen(fd, 'w', encoding='utf-8', newline='') as f:
             f.write(current_text)
-        npp_path = shutil.which("notepad++") or shutil.which("notepad++.exe")
-        if not npp_path:
-            possible_paths = [
-                r"C:\Program Files\Notepad++\notepad++.exe",
-                r"C:\Program Files (x86)\Notepad++\notepad++.exe"
-            ]
-            for p in possible_paths:
-                if os.path.exists(p):
-                    npp_path = p
-                    break
-        if npp_path:
-            cmd = [npp_path, "-multiInst", "-nosession", temp_path]
-        elif os.name == 'nt':
-            cmd = ["notepad", temp_path]
-        else:
-            editor = os.environ.get('EDITOR', 'nano')
-            cmd = [editor, temp_path]
+        from combinecopy.mobile.env import resolve_editor
+
+        editor = resolve_editor()
+        fallback = ["notepad"] if os.name == "nt" else ["vi"]
+        cmd = (list(editor) if editor else fallback) + [temp_path]
         try:
-            subprocess.run(cmd, check=True)
+            subprocess.run(cmd, check=False)
         except Exception as e:
             self.call_from_thread(self.notify, f"Editor failed to launch: {e}", severity="error")
         try:
@@ -2455,7 +2558,6 @@ class AutoAgentApp(App):
             
             _write_text_preserving(path_old, old_text, original_newline=nl)
             _write_text_preserving(path_new, new_text, original_newline=nl)
-            
             try:
                 subprocess.Popen(["meld", path_old, path_new])
                 self.notify("Opened file in Meld.", severity="info")
@@ -2464,7 +2566,30 @@ class AutoAgentApp(App):
                     subprocess.Popen(["meld.exe", path_old, path_new])
                     self.notify("Opened file in Meld.", severity="info")
                 except FileNotFoundError:
-                    self.notify("Meld not found. Please ensure 'meld' or 'meld.exe' is in your PATH.", severity="error")
+                    self._fallback_text_diff(path_old, path_new)
+
+    def _fallback_text_diff(self, path_old: str, path_new: str) -> None:
+        """No Meld (the normal case on Termux) - render a unified diff inline."""
+        diff_view = self.query_one("#diff-view", RichLog)
+        try:
+            proc = subprocess.run(
+                ["git", "diff", "--no-index", "--color=never", path_old, path_new],
+                capture_output=True, text=True, errors="replace", timeout=30
+            )
+            output = proc.stdout or proc.stderr
+        except Exception as e:
+            output = f"Could not produce a diff: {e}"
+
+        diff_view.clear()
+        diff_view.write(Text("Meld not found - showing a unified diff instead.\n", style="bold yellow"))
+        for line in (output or "No differences found.").splitlines():
+            if line.startswith("+") and not line.startswith("+++"):
+                diff_view.write(Text(line, style="green"))
+            elif line.startswith("-") and not line.startswith("---"):
+                diff_view.write(Text(line, style="red"))
+            else:
+                diff_view.write(Text(line, style="dim"))
+        self.notify("Meld not found; rendered an inline diff instead.", severity="warning")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id
@@ -2607,12 +2732,19 @@ class AutoAgentApp(App):
         self.query_one("#status-label", Label).update("Waiting for AI...")
         self.query_one("#ai-markdown", Markdown).update("*(AI output will appear here)*")
         self.query_one("#file-list", ListView).clear()
-        
         diff_view = self.query_one("#diff-view", RichLog)
         diff_view.clear()
         diff_view.write("Select a file to view diffs.")
         self._disable_all_buttons()
-        pyperclip.copy("")
+        if self.mobile_mode:
+            self.query_one("#status-label", Label).update("Press 'v' to paste, 'V' for editor")
+            self.polling_timer.resume()
+            self.call_after_refresh(self.action_paste_buffer)
+            return
+        try:
+            pyperclip.copy("")
+        except Exception:
+            pass
         self.polling_timer.resume()
 
     def _record_applied_file(self, file_obj: dict) -> None:
@@ -2638,7 +2770,7 @@ class AutoAgentApp(App):
             self.exit(summary_data)
         else:
             self.exit(None)
-def run_auto_agent(root_dir: str, known_files: list[str] | None = None, revert_mode: bool = False, ignore_initial_clipboard: bool = False, web_mode: bool = False, xml_mode: bool = False, consult_mode: bool = False, rehab_mode: bool = False):
+def run_auto_agent(root_dir: str, known_files: list[str] | None = None, revert_mode: bool = False, ignore_initial_clipboard: bool = False, web_mode: bool = False, xml_mode: bool = False, consult_mode: bool = False, rehab_mode: bool = False, mobile_mode: bool = False):
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -2659,7 +2791,8 @@ def run_auto_agent(root_dir: str, known_files: list[str] | None = None, revert_m
                 "web_mode": web_mode,
                 "xml_mode": xml_mode,
                 "consult_mode": consult_mode,
-                "rehab_mode": rehab_mode
+                "rehab_mode": rehab_mode,
+                "mobile_mode": mobile_mode
             }
             with open(in_name, "w", encoding="utf-8") as f:
                 json.dump(args_dict, f)
@@ -2681,7 +2814,7 @@ def run_auto_agent(root_dir: str, known_files: list[str] | None = None, revert_m
                 except Exception:
                     pass
     else:
-        app = AutoAgentApp(root_dir, known_files, revert_mode, ignore_initial_clipboard, web_mode, xml_mode=xml_mode, consult_mode=consult_mode, rehab_mode=rehab_mode)
+        app = AutoAgentApp(root_dir, known_files, revert_mode, ignore_initial_clipboard, web_mode, xml_mode=xml_mode, consult_mode=consult_mode, rehab_mode=rehab_mode, mobile_mode=mobile_mode)
         return app.run()
 
 if __name__ == "__main__":
@@ -2699,7 +2832,8 @@ if __name__ == "__main__":
             web_mode=args_dict.get("web_mode", False),
             xml_mode=args_dict.get("xml_mode", False),
             consult_mode=args_dict.get("consult_mode", False),
-            rehab_mode=args_dict.get("rehab_mode", False)
+            rehab_mode=args_dict.get("rehab_mode", False),
+            mobile_mode=args_dict.get("mobile_mode", False)
         )
         res = app.run()
         

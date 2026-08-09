@@ -45,11 +45,14 @@ from combinecopy.prompts import (
     get_system_prompt_important,
     get_git_diff
 )
-
 from combinecopy.tui.selection import run_file_selector
 from combinecopy.tui.prompt import SystemPromptApp
 from combinecopy.tui.confirm import ConfirmCopyApp
 from combinecopy.tui.apply import AutoAgentApp, OrchestratorAgentApp
+
+from combinecopy.mobile.env import is_termux
+from combinecopy.mobile.inbox import ensure_inbox_dir
+from combinecopy.mobile.provision import run_doctor, install_url_opener
 def resolve_selection_payload(selection_data, root_dir, max_depth, ext_filters, exclude_dirs):
     found_files = []
     important_files = []
@@ -443,7 +446,34 @@ def main():
     parser.add_argument("--consult", action="store_true", help="Enable CONSULT phase for the AI to ask abstract questions to an external LLM.")
     parser.add_argument("-d", "--diff", action="store_true", help="Inject current uncommitted git diff directly into the prompt context.")
     parser.add_argument("--divide", action="store_true", help="Enable Large Task Mode to divide complex requests into sub-tasks.")
+    parser.add_argument("-m", "--mobile", action="store_true", help="Enable Mobile (Termux) mode. Ingests payloads via the TUI paste buffer or an editor instead of polling the clipboard.")
+    parser.add_argument("--no-mobile", action="store_true", help="Disable the automatic Termux detection that would otherwise turn mobile mode on.")
+    parser.add_argument("--mobile-doctor", action="store_true", help="Run environment checks for Termux mobile mode and exit.")
+    parser.add_argument("--install-url-opener", action="store_true", help="Install the Termux share-sheet hook that drops shared text into ~/.cc_inbox, then exit.")
+    parser.add_argument("--force", action="store_true", help="Allow destructive provisioning steps, e.g. overwriting an existing termux-url-opener.")
     args = parser.parse_args()
+
+    # Termux gets mobile mode by default; --no-mobile is the escape hatch.
+    if args.no_mobile:
+        args.mobile = False
+    elif is_termux():
+        args.mobile = True
+
+    if args.mobile_doctor:
+        run_doctor(console)
+        return
+
+    if args.install_url_opener:
+        install_url_opener(console, force=args.force)
+        return
+
+    if args.mobile:
+        ensure_inbox_dir()
+        console.print(
+            "[bold cyan]Mobile mode:[/bold cyan] clipboard polling disabled. "
+            "Press [bold]v[/bold] to paste, [bold]V[/bold] for the editor, "
+            "[bold]r[/bold] to pull from ~/.cc_inbox."
+        )
 
     custom_rules = ""
     ccrules_path = os.path.join(os.getcwd(), '.ccrules')
@@ -544,7 +574,10 @@ def main():
                 console.print(Panel("Orchestrator payload successfully copied to clipboard.", title="Success", style="bold green"))
             return
         else:
-            app = AutoAgentApp(root_dir, revert_mode=args.revert, web_mode=args.web, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab)
+            # NOTE: this previously passed web_mode=args.web, which meant --web
+            # accidentally enabled keyboard macro mode. It should track --web-apply,
+            # matching the other AutoAgentApp construction site below.
+            app = AutoAgentApp(root_dir, revert_mode=args.revert, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile)
             result = app.run()
             if isinstance(result, dict) and result.get("type") == "task_division":
                 data = result.get("data")
@@ -924,7 +957,7 @@ def main():
             if args.web_apply:
                 phase_name += " [WEB MACRO MODE]"
             console.print(f"\n[bold cyan]Phase: {phase_name}[/bold cyan]")
-            app = AutoAgentApp(root_dir, all_known_files, revert_mode=args.revert, ignore_initial_clipboard=True, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab)
+            app = AutoAgentApp(root_dir, all_known_files, revert_mode=args.revert, ignore_initial_clipboard=True, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile)
             result = app.run()
             if isinstance(result, dict) and result.get("type") == "task_division":
                 data = result.get("data")

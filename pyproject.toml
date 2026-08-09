@@ -4,39 +4,34 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-tools"
-version = "0.1.0"
+version = "0.2.0"
 description = "A repository of TUI utility tools that interact with AI models and local workspaces."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "rich",
     "textual",
-    "keyboard",
     "pyperclip",
     "flask"
 ]
 
+[project.optional-dependencies]
+# `keyboard` installs a global hotkey hook: it needs root on Linux and cannot
+# build on Termux at all. Keeping it out of the base dependency set is what
+# makes `pip install -e .` succeed on Android. Every import site already
+# guards it behind a try/except, so the desktop features degrade cleanly.
+# Install with: pip install -e .[desktop]
+desktop = ["keyboard"]
+
 [project.scripts]
-combineCopy = "combineCopy:main"
+combineCopy = "combinecopy.cli:main"
 webapp = "webapp:main"
 ftpapp = "ftpapp:main"
-app = "combineCopy:app_main"
+app = "combinecopy.cli:app_main"
 
 [tool.setuptools]
-py-modules = [
-    "cc_prompts",
-    "cc_utils",
-    "combineCopy",
-    "ftpapp",
-    "kanban_store",
-    "tui_apply",
-    "tui_confirm",
-    "tui_culling",
-    "tui_kanban",
-    "tui_prompt",
-    "tui_rules",
-    "tui_selection",
-    "vcs_tfs",
-    "webapp",
-    "web_server"
-]
+# Top-level helper scripts that live outside the combinecopy package.
+py-modules = ["webapp", "ftpapp"]
+
+[tool.setuptools.packages.find]
+include = ["combinecopy*"]
