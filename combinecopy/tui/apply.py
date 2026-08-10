@@ -24,6 +24,11 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Header, Footer, Label, ListView, ListItem, Button, Static, RichLog, TextArea, Markdown
 from textual.binding import Binding
 from textual.screen import ModalScreen
+try:
+    from textual.widgets.text_area import Selection
+except ImportError:
+    Selection = None
+
 from combinecopy.utils import (
     safe_read_file,
     intelligent_json_fix,
@@ -424,7 +429,6 @@ class CommandExecutionScreen(ModalScreen[bool]):
         if not btn.disabled:
             success = self.process and self.process.returncode == 0
             self.dismiss(success)
-
 class HumanCorrectScreen(ModalScreen[str]):
     CSS = """
     HumanCorrectScreen {
@@ -447,9 +451,16 @@ class HumanCorrectScreen(ModalScreen[str]):
     #hc-right {
         width: 75%;
     }
-    #hc-search-pane {
+    #hc-top-right {
         height: 40%;
         border-bottom: solid #5a4d45;
+    }
+    #hc-diff-pane {
+        width: 50%;
+        border-right: solid #5a4d45;
+    }
+    #hc-replace-pane {
+        width: 50%;
     }
     #hc-file-pane {
         height: 60%;
@@ -465,6 +476,13 @@ class HumanCorrectScreen(ModalScreen[str]):
         border-top: solid #5a4d45;
         align: right middle;
     }
+    .hc-warning-label {
+        color: #ff5555;
+        text-style: bold;
+        margin-right: 1;
+        content-align: right middle;
+        width: 1fr;
+    }
     Button {
         margin: 0 1;
     }
@@ -477,24 +495,33 @@ class HumanCorrectScreen(ModalScreen[str]):
         self.original_search = original_search
         self.candidates = candidates
         self.replace_text = replace_text
+        self.confirm_armed = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="hc-dialog"):
             with Horizontal(id="hc-body"):
                 with Vertical(id="hc-left"):
                     yield Label("Partial Matches", classes="hc-title")
-                    yield ListView(
-                        *[ListItem(Label(f"Match lines {c['start_line']}-{c['end_line']}"), id=f"cand-{i}") for i, c in enumerate(self.candidates)],
-                        id="hc-cand-list"
-                    )
+                    list_items = []
+                    for i, c in enumerate(self.candidates):
+                        cov_pct = int(c["coverage"] * 100)
+                        warn = "⚠️ " if cov_pct < 40 else ""
+                        lbl = f"{warn}Lines {c['start_line']}-{c['end_line']}\n{c['matched_lines']}/{c['search_lines']} matched ({cov_pct}%)"
+                        list_items.append(ListItem(Label(lbl), id=f"cand-{i}"))
+                    yield ListView(*list_items, id="hc-cand-list")
                 with Vertical(id="hc-right"):
-                    with Vertical(id="hc-search-pane"):
-                        yield Label("Diff: Original Search vs Selected Candidate", classes="hc-title")
-                        yield RichLog(id="hc-diff-view", highlight=True)
+                    with Horizontal(id="hc-top-right"):
+                        with Vertical(id="hc-diff-pane"):
+                            yield Label("Diff: Original Search vs Selected Target", classes="hc-title")
+                            yield RichLog(id="hc-diff-view", highlight=True)
+                        with Vertical(id="hc-replace-pane"):
+                            yield Label("Replacement Code", classes="hc-title")
+                            yield TextArea(self.replace_text, id="hc-replace-view", read_only=True)
                     with Vertical(id="hc-file-pane"):
-                        yield Label("File Content (Select the correct area and press Confirm)", classes="hc-title")
+                        yield Label("File Content (Select the WHOLE region to replace to avoid duplication!)", classes="hc-title")
                         yield TextArea(self.file_text, id="hc-file-text")
             with Horizontal(id="hc-footer"):
+                yield Label("", id="hc-warning", classes="hc-warning-label")
                 yield Button("Confirm Selection", id="btn-confirm", variant="success")
                 yield Button("Cancel", id="btn-cancel", variant="error")
 
@@ -512,8 +539,11 @@ class HumanCorrectScreen(ModalScreen[str]):
         if 0 <= idx < len(self.candidates):
             c = self.candidates[idx]
             file_ta = self.query_one("#hc-file-text", TextArea)
-            file_ta.move_cursor((c["start_line"] - 1, 0))
-            file_ta.scroll_cursor_visible()
+            if Selection is not None:
+                file_ta.selection = Selection((c["start_line"] - 1, 0), (c["end_line"] - 1, 9999))
+            else:
+                file_ta.move_cursor((c["start_line"] - 1, 0))
+            file_ta.scroll_cursor_visible(center=True)
             self._render_candidate_diff(idx)
 
     def _render_candidate_diff(self, idx: int) -> None:
@@ -530,14 +560,36 @@ class HumanCorrectScreen(ModalScreen[str]):
         else:
             render_word_diff(search_text, cand_text, diff_view)
 
+    def on_text_area_selection_changed(self, event: TextArea.SelectionChanged) -> None:
+        if event.text_area.id == "hc-file-text" and self.confirm_armed:
+            self.confirm_armed = False
+            self.query_one("#hc-warning", Label).update("")
+            btn = self.query_one("#btn-confirm", Button)
+            btn.label = "Confirm Selection"
+            btn.variant = "success"
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-confirm":
             file_ta = self.query_one("#hc-file-text", TextArea)
             selected_text = file_ta.selected_text
-            if selected_text:
-                self.dismiss(selected_text)
-            else:
+            if not selected_text:
                 self.app.notify("Please select some text in the File Content area first.", severity="error")
+                return
+            
+            selected_lines = len(selected_text.splitlines())
+            search_lines = self.candidates[0]["search_lines"] if self.candidates else 0
+            
+            if search_lines > 0 and (selected_lines < search_lines * 0.5):
+                if not self.confirm_armed:
+                    self.confirm_armed = True
+                    warn_label = self.query_one("#hc-warning", Label)
+                    warn_label.update(f"⚠️ Warning: Selected region ({selected_lines} lines) is much shorter than search block ({search_lines} lines). Duplication likely!")
+                    btn = self.query_one("#btn-confirm", Button)
+                    btn.label = "Confirm Anyway"
+                    btn.variant = "error"
+                    return
+
+            self.dismiss(selected_text)
         elif event.button.id == "btn-cancel":
             self.dismiss(None)
 
@@ -1877,7 +1929,6 @@ class AutoAgentApp(App):
         self.query_one("#btn-discard-all", Button).disabled = False
         if self.query("Button#btn-fix-json"):
             self.query_one("#btn-fix-json", Button).disabled = False
-
     def _find_partial_matches(self, search_text: str, file_text: str) -> list:
         search_lines = search_text.splitlines()
         file_lines = file_text.splitlines()
@@ -1887,23 +1938,33 @@ class AutoAgentApp(App):
         
         matcher = difflib.SequenceMatcher(None, search_norm, file_norm)
         blocks = matcher.get_matching_blocks()
-        best_n = 0
         candidates = []
         for block in blocks:
             if block.size > 0:
                 matched_text = "".join(search_norm[block.a : block.a + block.size])
                 if not matched_text: continue
-                if block.size > best_n:
-                    best_n = block.size
-                    candidates = [{"start_line": block.b + 1, "end_line": block.b + block.size}]
-                elif block.size == best_n:
-                    candidates.append({"start_line": block.b + 1, "end_line": block.b + block.size})
-        if best_n > 0:
-            unique_cands = {}
-            for c in candidates:
-                unique_cands[c["start_line"]] = c
-            return sorted(unique_cands.values(), key=lambda x: x["start_line"])
-        return []
+                
+                start_line = max(1, block.b - block.a + 1)
+                end_line = min(len(file_lines), block.b - block.a + len(search_lines))
+                
+                candidates.append({
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "matched_lines": block.size,
+                    "search_lines": len(search_lines),
+                    "coverage": block.size / len(search_lines)
+                })
+                
+        candidates.sort(key=lambda x: (x["matched_lines"], x["coverage"]), reverse=True)
+        unique_cands = {}
+        for c in candidates:
+            key = (c["start_line"], c["end_line"])
+            if key not in unique_cands:
+                unique_cands[key] = c
+            if len(unique_cands) >= 5:
+                break
+                
+        return list(unique_cands.values())
 
     def _validate_file_obj(self, file_obj: dict, status_callback=None) -> None:
         action = file_obj.get("action", "modify").upper()
@@ -2003,7 +2064,9 @@ class AutoAgentApp(App):
                                 if candidates:
                                     block["_candidates"] = candidates
                                     block["_original_search"] = search_text
-                                    errors.append(f"Search block {b_idx + 1} not found. Found {len(candidates)} partial match(es). Press 'h' to resolve.")
+                                    best_cand = candidates[0]
+                                    cov_pct = int(best_cand["coverage"] * 100)
+                                    errors.append(f"Search block {b_idx + 1} not found. Found partial match covering {best_cand['matched_lines']}/{best_cand['search_lines']} lines ({cov_pct}%) near lines {best_cand['start_line']}-{best_cand['end_line']}. Press 'h' to resolve.")
                                 else:
                                     errors.append(f"Search block {b_idx + 1} not found. Fuzzy match and partial match also failed.")
                 except Exception as e:
@@ -2445,17 +2508,18 @@ class AutoAgentApp(App):
                     )
                     return
             self.notify("No fixable blocks found in this file.", severity="warning")
-
     def on_human_correct_result(self, file_idx: int, block_idx: int, selected_text: str | None) -> None:
         if selected_text is None: return
         file_obj = self.payload["files"][file_idx]
         block = file_obj["search_replace"][block_idx]
+        old_len = len(block["search"].splitlines())
+        new_len = len(selected_text.splitlines())
         block["search"] = selected_text
         block.pop("_candidates", None)
         block.pop("_original_search", None)
         if "_warnings" not in file_obj:
             file_obj["_warnings"] = []
-        file_obj["_warnings"].append(f"Human corrected search block {block_idx + 1}.")
+        file_obj["_warnings"].append(f"Human corrected search block {block_idx + 1} ({old_len} -> {new_len} lines).")
         self._validate_file_obj(file_obj)
         self.refresh_file_list()
     def action_fix_json(self) -> None:
