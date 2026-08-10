@@ -361,10 +361,9 @@ EXECUTION_ORCHESTRATOR_XML = r"""ORCHESTRATE: Once the user approves your plan, 
 1. **CRITICAL XML FORMATTING**: You MUST wrap all code or complex instructions inside `<![CDATA[ ... ]]>` blocks to prevent unescaped angle brackets or ampersands from breaking the XML parser. Do NOT attempt to manually escape quotes."""
 
 VERIFICATION = r"""VERIFICATION: Test your changes conceptually and validate correctness. Ask the user to run specific commands or tests to verify the code, and evaluate the outputs they provide. Present a Walkthrough / Verification Summary in the chat after completing verification to document what was accomplished, what was tested, and validation results."""
-
 FILE_CULLING = r"""<file_culling_instructions>
-At any point during the PLANNING phase, you can request full files or specific functions/classes of files to build your understanding.
-To do so, output a JSON payload using the "SELECT" phase. You can mix full file requests and specific function requests.
+At any point during the PLANNING phase, you can request full files, specific functions/classes, or text searches to build your understanding.
+To do so, output a JSON payload using the "SELECT" phase. You can freely mix all three request types in a single payload.
 Output the payload wrapped in a markdown code block:
 ```json
 {
@@ -377,15 +376,37 @@ Output the payload wrapped in a markdown code block:
       "path": "relative/path/to/partial_file.py",
       "names": ["function_name", "ClassName"]
     }
+  ],
+  "search": [
+    {
+      "path": "relative/path/to/file.py",
+      "query": "compute_new_text(",
+      "regex": false,
+      "case_sensitive": true
+    }
   ]
 }
 ```
-The user's tool will automatically parse this and copy the requested context into your clipboard.
-</file_culling_instructions>"""
 
+**Choosing the right request type:**
+- Use `files` when you need a whole file.
+- Use `functions` when you already know the exact symbol name you want.
+- Use `search` when you know *what* the code does or how it is called, but not *where* it lives. This is the right tool for tracing call sites, finding every use of a config key, or locating a literal string.
+
+**Search behaviour you must be aware of:**
+1. Every match is returned along with the 50 lines above and the 50 lines below it. This context size is fixed and cannot be configured.
+2. If two matches are close enough that their context windows overlap, they are merged and returned as one larger contiguous block rather than as duplicated overlapping snippets. A search reporting 4 matches may therefore render as a single block.
+3. Omitted lines are marked as `// ... (lines 84-231 hidden) ...` so you can always tell where a block sits in the original file.
+4. `query` is matched as a **literal substring** by default. Set `"regex": true` only if you genuinely need a pattern, and remember to escape backslashes correctly for JSON.
+5. `case_sensitive` defaults to `true`. Set it to `false` to widen the match.
+6. Keep queries specific. A query matching hundreds of lines will prompt the user to truncate it, and you will be told how many matches were withheld.
+7. If `path` is omitted or does not resolve, the user will be asked which files to search instead. Provide a path whenever you can.
+
+The user's tool will automatically parse this and copy the requested context into your clipboard, along with a note reporting how many matches each search found.
+</file_culling_instructions>"""
 FILE_CULLING_XML = r"""<file_culling_instructions>
-At any point during the PLANNING phase, you can request full files or specific functions/classes of files to build your understanding.
-To do so, output an XML payload using the "SELECT" phase. You can mix full file requests and specific function requests.
+At any point during the PLANNING phase, you can request full files, specific functions/classes, or text searches to build your understanding.
+To do so, output an XML payload using the "SELECT" phase. You can freely mix all three request types in a single payload.
 Output the payload wrapped in a markdown code block:
 ```xml
 <antigravity_payload>
@@ -400,9 +421,34 @@ Output the payload wrapped in a markdown code block:
       <name>ClassName</name>
     </item>
   </functions>
+  <searches>
+    <query_item>
+      <path>relative/path/to/file.py</path>
+      <query><![CDATA[compute_new_text(]]></query>
+      <regex>false</regex>
+      <case_sensitive>true</case_sensitive>
+    </query_item>
+  </searches>
 </antigravity_payload>
 ```
-The user's tool will automatically parse this and copy the requested context into your clipboard.
+
+**NOTE ON TAG NAMING:** the search selector uses `<searches><query_item>` rather than `<search>`, because `<search>` is already reserved by the EXECUTION schema inside `<search_replace>`. Do not confuse the two.
+
+**Choosing the right request type:**
+- Use `<files>` when you need a whole file.
+- Use `<functions>` when you already know the exact symbol name you want.
+- Use `<searches>` when you know *what* the code does or how it is called, but not *where* it lives. This is the right tool for tracing call sites, finding every use of a config key, or locating a literal string.
+
+**Search behaviour you must be aware of:**
+1. Every match is returned along with the 50 lines above and the 50 lines below it. This context size is fixed and cannot be configured.
+2. If two matches are close enough that their context windows overlap, they are merged and returned as one larger contiguous block rather than as duplicated overlapping snippets. A search reporting 4 matches may therefore render as a single block.
+3. Omitted lines are marked as `// ... (lines 84-231 hidden) ...` so you can always tell where a block sits in the original file.
+4. `<query>` is matched as a **literal substring** by default. Always wrap it in `<![CDATA[ ... ]]>`. Set `<regex>true</regex>` only if you genuinely need a pattern.
+5. `<case_sensitive>` defaults to true. Set it to false to widen the match.
+6. Keep queries specific. A query matching hundreds of lines will prompt the user to truncate it, and you will be told how many matches were withheld.
+7. If `<path>` is omitted or does not resolve, the user will be asked which files to search instead. Provide a path whenever you can.
+
+The user's tool will automatically parse this and copy the requested context into your clipboard, along with a note reporting how many matches each search found.
 </file_culling_instructions>"""
 
 CONSULT_DEFAULT = r"""CONSULT: If you encounter a complex algorithm, unknown API, or syntax where you are unsure of the optimal approach, you can pause your work and consult an external Expert AI.

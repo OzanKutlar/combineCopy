@@ -24,7 +24,6 @@ except ImportError:
 # Ensure the root directory is in sys.path so 'combinecopy' can be imported
 # regardless of where the script is executed from.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 from combinecopy.utils import (
     console,
     safe_read_file,
@@ -33,7 +32,12 @@ from combinecopy.utils import (
     print_auto_summary,
     display_summary,
     copy_to_clipboard,
-    copy_file_to_clipboard
+    copy_file_to_clipboard,
+    render_partial_content,
+    find_search_hits,
+    build_search_blocks,
+    partial_coverage_ratio,
+    SEARCH_CONTEXT_LINES
 )
 
 from combinecopy.prompts import (
@@ -53,6 +57,200 @@ from combinecopy.tui.apply import AutoAgentApp, OrchestratorAgentApp
 from combinecopy.mobile.env import is_termux
 from combinecopy.mobile.inbox import ensure_inbox_dir
 from combinecopy.mobile.provision import run_doctor, install_url_opener
+
+# Beyond this many hits, or this much of the file exposed, we stop and let the
+# user decide rather than silently dumping most of a file into the context.
+SEARCH_HIT_WARN_THRESHOLD = 25
+SEARCH_COVERAGE_WARN_RATIO = 0.8
+
+
+def _pick_search_targets(entry_path, resolved_map, scanned_files, root_dir):
+    """Resolves a search entry to relative paths, asking the user when it cannot."""
+    if entry_path and entry_path in resolved_map:
+        return resolved_map[entry_path]
+
+    label = f"'{entry_path}'" if entry_path else "(no path was provided)"
+    console.print(f"\n[bold yellow]Search target {label} could not be resolved.[/bold yellow]")
+    console.print(f"The current workspace scan holds [cyan]{len(scanned_files)}[/cyan] file(s).")
+    console.print("  [cyan]A.[/cyan] Search every file in the scanned workspace")
+    console.print("  [cyan]S.[/cyan] Select specific files to search (opens the file selector)")
+    console.print("  [cyan]Enter.[/cyan] Skip this search")
+
+    ans = console.input("[bold]Choice: [/bold]").strip().upper()
+    if ans == 'A':
+        return [os.path.relpath(f, root_dir).replace("\\", "/") for f in scanned_files]
+    if ans == 'S':
+        selected = run_file_selector(root_dir, scanned_files)
+        if not selected or not selected[0]:
+            console.print("[yellow]No files selected. Skipping this search.[/yellow]")
+            return []
+        return [os.path.relpath(f, root_dir).replace("\\", "/") for f in selected[0]]
+    return []
+
+
+def _confirm_large_search(query, rel_path, hit_count, coverage, total_lines):
+    """Asks how to handle an oversized search. Returns full/all/truncate/skip."""
+    console.print(f"\n[bold yellow]Search '{query}' in {rel_path} matched {hit_count} line(s).[/bold yellow]")
+    console.print(
+        f"With {SEARCH_CONTEXT_LINES} lines of context in both directions this would expose "
+        f"{coverage * 100:.0f}% of the file ({total_lines} lines total)."
+    )
+    console.print("  [cyan]F.[/cyan] Include the whole file instead")
+    console.print("  [cyan]A.[/cyan] Include every match as context blocks anyway")
+    console.print(f"  [cyan]T.[/cyan] Truncate to the first {SEARCH_HIT_WARN_THRESHOLD} matches")
+    console.print("  [cyan]S.[/cyan] Skip this search entirely")
+
+    choices = {'F': 'full', 'A': 'all', 'T': 'truncate', 'S': 'skip'}
+    for _ in range(5):
+        ans = console.input("[bold]Choice (F/A/T/S): [/bold]").strip().upper()
+        if ans in choices:
+            return choices[ans]
+        console.print("[red]Please enter F, A, T or S.[/red]")
+    return 'skip'
+
+
+def _run_single_search(query, rel_path, root_dir, use_regex, case_sensitive,
+                       found_files_final, important_files, partial_files):
+    """Searches one file and folds any hits into partial_files. Returns a report entry."""
+    abs_path = os.path.abspath(os.path.join(root_dir, rel_path))
+    if not os.path.isfile(abs_path):
+        return None
+    if abs_path in important_files:
+        # A full-file include already supersedes anything a blob could add.
+        return None
+
+    try:
+        content = safe_read_file(abs_path)
+    except Exception as e:
+        console.print(f"  [red]Could not read {rel_path}: {e}[/red]")
+        return None
+    if not content or content.startswith("(This is a binary"):
+        return None
+
+    hits = find_search_hits(content, query, regex=use_regex, case_sensitive=case_sensitive)
+    if not hits:
+        return None
+
+    total_lines = len(content.splitlines()) or 1
+    blocks = build_search_blocks(hits, query)
+    coverage = partial_coverage_ratio(total_lines, blocks)
+    truncated = 0
+
+    if len(hits) > SEARCH_HIT_WARN_THRESHOLD or coverage >= SEARCH_COVERAGE_WARN_RATIO:
+        choice = _confirm_large_search(query, rel_path, len(hits), coverage, total_lines)
+        if choice == 'skip':
+            return {"query": query, "path": rel_path, "hits": len(hits),
+                    "truncated": 0, "note": "skipped by the user"}
+        if choice == 'full':
+            if abs_path not in found_files_final:
+                found_files_final.append(abs_path)
+            if abs_path not in important_files:
+                important_files.append(abs_path)
+            partial_files.pop(abs_path, None)
+            console.print(f"  Search promoted [cyan]{rel_path}[/cyan] to a full-file include.")
+            return {"query": query, "path": rel_path, "hits": len(hits),
+                    "truncated": 0, "note": "the whole file was included instead of context blocks"}
+        if choice == 'truncate':
+            truncated = len(hits) - SEARCH_HIT_WARN_THRESHOLD
+            hits = hits[:SEARCH_HIT_WARN_THRESHOLD]
+            blocks = build_search_blocks(hits, query)
+
+    if abs_path not in found_files_final:
+        found_files_final.append(abs_path)
+    existing = partial_files.setdefault(abs_path, [])
+    existing_names = {b["name"] for b in existing}
+    for b in blocks:
+        if b["name"] not in existing_names:
+            existing.append(b)
+
+    console.print(
+        f"  Search '[yellow]{query}[/yellow]' in [cyan]{rel_path}[/cyan]: "
+        f"{len(hits)} hit(s) with {SEARCH_CONTEXT_LINES} lines of context each side."
+    )
+    return {"query": query, "path": rel_path, "hits": len(hits),
+            "truncated": truncated, "note": ""}
+
+
+def resolve_search_requests(search_list, resolved_map, scanned_files, root_dir,
+                            found_files_final, important_files, partial_files):
+    """Runs every SELECT search entry, returning a report for the model."""
+    report = []
+    if not search_list:
+        return report
+
+    for entry in search_list:
+        if not isinstance(entry, dict):
+            continue
+        query = entry.get("query") or entry.get("string") or ""
+        if not query:
+            console.print("[yellow]Warning:[/yellow] A search entry had no 'query' and was skipped.")
+            continue
+
+        use_regex = bool(entry.get("regex", False))
+        case_sensitive = entry.get("case_sensitive", True) is not False
+
+        targets = _pick_search_targets(entry.get("path"), resolved_map, scanned_files, root_dir)
+        if not targets:
+            report.append({"query": query, "path": entry.get("path") or "(unresolved)",
+                           "hits": 0, "truncated": 0,
+                           "note": "the target file could not be resolved, so nothing was searched"})
+            continue
+
+        searched = 0
+        matched = 0
+        aborted = False
+        for rel_path in targets:
+            try:
+                result = _run_single_search(
+                    query, rel_path, root_dir, use_regex, case_sensitive,
+                    found_files_final, important_files, partial_files
+                )
+            except ValueError as e:
+                console.print(f"  [red]{e}[/red]")
+                report.append({"query": query, "path": entry.get("path") or "(multiple)",
+                               "hits": 0, "truncated": 0, "note": str(e)})
+                aborted = True
+                break
+            searched += 1
+            if result:
+                matched += 1
+                report.append(result)
+
+        if aborted:
+            continue
+        if len(targets) > 1:
+            console.print(
+                f"  [dim]Searched {searched} file(s) for '{query}'; "
+                f"{matched} contained a match.[/dim]"
+            )
+        if matched == 0:
+            where = entry.get("path") or f"{searched} scanned file(s)"
+            report.append({"query": query, "path": where, "hits": 0,
+                           "truncated": 0, "note": "no matches found"})
+    return report
+
+
+def build_search_note(search_report):
+    """Formats the search outcome so the model knows what was and was not found."""
+    if not search_report:
+        return ""
+    lines = ["\n--- SYSTEM NOTE: SEARCH RESULTS ---"]
+    for r in search_report:
+        line = f"- '{r['query']}' in {r['path']}: {r['hits']} match(es)"
+        if r.get("truncated"):
+            line += (f", TRUNCATED. {r['truncated']} further match(es) were withheld by the user. "
+                     f"Narrow your query and search again if you need the rest.")
+        elif r.get("note"):
+            line += f" ({r['note']})"
+        else:
+            line += f", shown with {SEARCH_CONTEXT_LINES} lines of context on each side."
+        lines.append(line)
+    lines.append("Matches whose context windows overlapped were merged into a single block, "
+                 "so the block count may be lower than the match count.")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def resolve_selection_payload(selection_data, root_dir, max_depth, ext_filters, exclude_dirs):
     found_files = []
     important_files = []
@@ -64,13 +262,18 @@ def resolve_selection_payload(selection_data, root_dir, max_depth, ext_filters, 
         scanned_files = get_files_recursive(root_dir, 0, max_depth, ext_filters, exclude_dirs=exclude_dirs)
 
     prime_ast_cache(root_dir, scanned_files)
-
     full_files_list = selection_data.get("files", [])
     functions_list = selection_data.get("functions", [])
+    search_list = selection_data.get("search", []) or []
 
     req_paths = set(full_files_list)
     for entry in functions_list:
         if entry.get("path"):
+            req_paths.add(entry.get("path"))
+    # Search targets go through the exact same resolver as everything else, so
+    # they inherit suffix/basename matching and the ambiguity prompt for free.
+    for entry in search_list:
+        if isinstance(entry, dict) and entry.get("path"):
             req_paths.add(entry.get("path"))
     resolved_map, ambiguous_map, missing_list = resolve_paths(req_paths, scanned_files, root_dir)
     resolved_map = {k: [v] for k, v in resolved_map.items()}
@@ -117,7 +320,7 @@ def resolve_selection_payload(selection_data, root_dir, max_depth, ext_filters, 
         ans = console.input("\n[bold yellow]Continue without missing files? [Y/n]: [/bold yellow]").strip().lower()
         if ans in ['n', 'no']:
             console.print("[bold yellow]Operation cancelled by user.[/bold yellow]")
-            return None, None, None, None
+            return None, None, None, None, None
 
     missing_files_warnings = [p for p in req_paths if p not in resolved_map]
     if missing_files_warnings:
@@ -224,11 +427,15 @@ def resolve_selection_payload(selection_data, root_dir, max_depth, ext_filters, 
                             if b["name"] not in existing_names:
                                 partial_files[abs_p].append(b)
                                 console.print(f"  Resolved and selected function [cyan]{b['name']}[/cyan] in [cyan]{spath}[/cyan]")
-
         for uf in unfound_funcs:
             console.print(f"  [yellow]Warning:[/yellow] Function/Class '[red]{uf}[/red]' could not be found anywhere in the workspace.")
 
-    return found_files_final, important_files, partial_files, missing_files_warnings
+    search_report = resolve_search_requests(
+        search_list, resolved_map, scanned_files, root_dir,
+        found_files_final, important_files, partial_files
+    )
+
+    return found_files_final, important_files, partial_files, missing_files_warnings, search_report
 
 def manage_tasks_cli(tasks_data, root_dir, max_depth, ext_filters, exclude_dirs, args, custom_rules):
     import json
@@ -290,11 +497,10 @@ def manage_tasks_cli(tasks_data, root_dir, max_depth, ext_filters, exclude_dirs,
                     "files": selected_task.get("files", []),
                     "functions": selected_task.get("functions", [])
                 }
-
                 res = resolve_selection_payload(sel_data, root_dir, max_depth, ext_filters, exclude_dirs)
                 if res[0] is None:
                     continue
-                found_files, imp_files, part_files, missing = res
+                found_files, imp_files, part_files, missing, task_search_report = res
                 
                 if ans_mod in ['y', 'yes']:
                     from combinecopy.tui.selection import run_file_selector
@@ -331,37 +537,23 @@ def manage_tasks_cli(tasks_data, root_dir, max_depth, ext_filters, exclude_dirs,
                     try:
                         content = safe_read_file(file_path)
                         if is_partial:
-                            blocks = part_files[file_path]
-                            lines = content.splitlines(keepends=True)
-                            intervals = []
-                            for b in blocks:
-                                intervals.append([max(0, b["start"] - 3), min(len(lines) - 1, b["end"] + 3)])
-                            intervals.sort(key=lambda x: x[0])
-                            merged = []
-                            for interval in intervals:
-                                if not merged or merged[-1][1] < interval[0] - 1:
-                                    merged.append(interval)
-                                else:
-                                    merged[-1][1] = max(merged[-1][1], interval[1])
-                            partial_content = []
-                            for idx_m, interval in enumerate(merged):
-                                if idx_m > 0:
-                                    partial_content.append("\n// ... (hidden lines) ...\n\n")
-                                partial_content.extend(lines[interval[0]:interval[1]+1])
-                            file_context_buffer.append("".join(partial_content))
+                            file_context_buffer.append(render_partial_content(content, part_files[file_path]))
                         else:
                             file_context_buffer.append(content)
                     except Exception as e:
                         file_context_buffer.append(f"[Error reading file: {e}]")
                     file_context_buffer.append("```")
                     file_context_buffer.append("\n")
-
                 if missing:
                     file_context_buffer.append("\n--- SYSTEM NOTE: MISSING FILES ---")
                     file_context_buffer.append("The following files were requested but could not be found or resolved:")
                     for mfw in missing:
                         file_context_buffer.append(f"- {mfw}")
                     file_context_buffer.append("")
+
+                search_note = build_search_note(task_search_report)
+                if search_note:
+                    file_context_buffer.append(search_note)
                     
                 file_context_buffer.append("\n--- SYSTEM NOTE: CONTEXT PRUNING ---")
                 from combinecopy.prompts import get_prune
@@ -606,6 +798,7 @@ def main():
         important_files = None
         partial_files = {}
         missing_files_warnings = []
+        search_report = []
 
         if args.json_select:
             console.print("[bold cyan]Phase: Selection Parsing[/bold cyan]")
@@ -628,7 +821,7 @@ def main():
                 data = parse_xml_to_dict(xml_str)
                 if data:
                     phase = data.get("phase")
-                    if phase == "SELECT" or (not phase and ("files" in data or "functions" in data)):
+                    if phase == "SELECT" or (not phase and ("files" in data or "functions" in data or "search" in data)):
                         selection_data = data
                         break
                     
@@ -638,10 +831,10 @@ def main():
                 for json_str in results:
                     data, _ = intelligent_json_fix(json_str)
                     if data and isinstance(data, dict):
-                        phase = data.get("phase")
-                        if phase == "SELECT" or (not phase and ("files" in data or "functions" in data)):
-                            selection_data = data
-                            break
+                            phase = data.get("phase")
+                            if phase == "SELECT" or (not phase and ("files" in data or "functions" in data or "search" in data)):
+                                selection_data = data
+                                break
 
             if not selection_data:
                 console.print("[bold red]No valid SELECT JSON or XML payload found on clipboard.[/bold red]")
@@ -651,7 +844,7 @@ def main():
             res = resolve_selection_payload(selection_data, root_dir, max_depth, ext_filters, args.exclude)
             if res[0] is None:
                 return
-            found_files, important_files, partial_files, missing_files_warnings = res
+            found_files, important_files, partial_files, missing_files_warnings, search_report = res
             
             if not found_files:
                 console.print("[bold red]No files were successfully selected from the payload.[/bold red]")
@@ -814,24 +1007,7 @@ def main():
                             try:
                                 content = safe_read_file(file_path)
                                 if is_partial:
-                                    blocks = partial_files[file_path]
-                                    lines = content.splitlines(keepends=True)
-                                    intervals = []
-                                    for b in blocks:
-                                        intervals.append([max(0, b["start"] - 3), min(len(lines) - 1, b["end"] + 3)])
-                                    intervals.sort(key=lambda x: x[0])
-                                    merged = []
-                                    for interval in intervals:
-                                        if not merged or merged[-1][1] < interval[0] - 1:
-                                            merged.append(interval)
-                                        else:
-                                            merged[-1][1] = max(merged[-1][1], interval[1])
-                                    partial_content = []
-                                    for i, interval in enumerate(merged):
-                                        if i > 0:
-                                            partial_content.append("\n// ... (hidden lines) ...\n\n")
-                                        partial_content.extend(lines[interval[0]:interval[1]+1])
-                                    file_context_buffer.append("".join(partial_content))
+                                    file_context_buffer.append(render_partial_content(content, partial_files[file_path]))
                                 else:
                                     file_context_buffer.append(content)
                             except Exception as e:
@@ -851,7 +1027,10 @@ def main():
                         for mfw in missing_files_warnings:
                             file_context_buffer.append(f"- {mfw}")
                         file_context_buffer.append("Please check your paths and request them again if necessary.\n")
-                        
+                    search_note = build_search_note(search_report)
+                    if search_note:
+                        file_context_buffer.append(search_note)
+
                     if args.json_select:
                         from combinecopy.prompts import get_prune
                         file_context_buffer.append("\n--- SYSTEM NOTE: CONTEXT PRUNING ---")

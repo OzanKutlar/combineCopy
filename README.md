@@ -129,7 +129,26 @@ combineCopy -f gradle kt xml -s -a --system
 | `--cli` | Enable CLI Mode, allowing the LLM to output terminal commands in its payload. | false | none |
 | `--consult` | Enable the consultation phase, permitting the AI to query external Expert LLMs. | false | none |
 | `--xml` | Instruct the AI to output XML payloads instead of JSON, bypassing quote-escaping vulnerabilities. | false | -x |
-| `--json-select` | Parse a selection payload directly from the clipboard to automatically retrieve files/functions during the exploration phase. | false | -js |
+| `--json-select` | Parse a selection payload directly from the clipboard to automatically retrieve files, functions, and search results during the exploration phase. | false | -js |
+
+#### Search Selector (`-js`)
+
+Alongside whole files and named functions, a `SELECT` payload can ask for a text search. The tool finds every occurrence of the query inside the target file and returns each one padded by 50 lines in both directions.
+
+```json
+{
+  "phase": "SELECT",
+  "search": [
+    { "path": "combinecopy/utils.py", "query": "compute_new_text(" }
+  ]
+}
+```
+
+When two matches sit close enough that their context windows overlap, the windows are merged and emitted as one contiguous block rather than as duplicated snippets. Skipped regions are marked with their line ranges, so the model can always tell where a block came from.
+
+Queries match as literal substrings by default. Pass `"regex": true` for pattern matching, or `"case_sensitive": false` to widen the match. The 50-line context is deliberately fixed and not exposed to the model.
+
+Two interactive guards keep a sloppy query from swallowing the workspace. If a search returns more than 25 hits, or its merged windows would expose 80% or more of the file, you are asked whether to include the whole file, keep every block, truncate to the first 25 hits, or skip. If you truncate, the model is told how many matches were withheld so it can narrow the query itself. If the path is missing or does not resolve, you are shown how many files the current scan holds and can either search all of them or pick a subset through the file selector TUI.
 #### Environment Integrations
 
 | Option | Description | Default | Alias |

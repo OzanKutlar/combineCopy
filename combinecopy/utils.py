@@ -243,6 +243,127 @@ def search_ast_for_functions(func_names: list[str], root_dir: str) -> dict:
 def get_blocks_by_name(filepath: str, root_dir: str, name: str) -> list[dict]:
     blocks = get_cached_blocks(filepath, root_dir)
     return [b for b in blocks if name in b["name"]]
+SEARCH_CONTEXT_LINES = 50
+DEFAULT_BLOCK_PAD = 3
+_SEARCH_SCAN_LIMIT = 100000
+
+
+def find_search_hits(content: str, query: str, regex: bool = False, case_sensitive: bool = True) -> list[int]:
+    """Returns the 0-indexed line numbers where `query` starts inside `content`.
+
+    A multi-line query resolves to the line where the match begins. The scan is
+    bounded so a pathological pattern cannot stall the selection phase.
+    """
+    if not content or not query:
+        return []
+
+    hits = []
+    if regex:
+        flags = 0 if case_sensitive else re.IGNORECASE
+        try:
+            pattern = re.compile(query, flags)
+        except re.error as e:
+            raise ValueError(f"Invalid regex pattern '{query}': {e}")
+        for count, m in enumerate(pattern.finditer(content)):
+            if count >= _SEARCH_SCAN_LIMIT:
+                break
+            hits.append(content.count('\n', 0, m.start()))
+    else:
+        haystack = content if case_sensitive else content.lower()
+        needle = query if case_sensitive else query.lower()
+        cursor = 0
+        for _ in range(_SEARCH_SCAN_LIMIT):
+            found = haystack.find(needle, cursor)
+            if found == -1:
+                break
+            hits.append(haystack.count('\n', 0, found))
+            cursor = found + max(1, len(needle))
+
+    return list(dict.fromkeys(hits))
+
+
+def build_search_blocks(hits: list[int], query: str, context: int = SEARCH_CONTEXT_LINES) -> list[dict]:
+    """Wraps raw line hits as partial-context blocks carrying a wide pad."""
+    label = query if len(query) <= 40 else query[:40] + "..."
+    label = label.replace("\n", " ")
+    return [
+        {"name": f"[SEARCH] {label} @ line {h + 1}", "start": h, "end": h, "pad": context}
+        for h in hits
+    ]
+
+
+def merge_line_intervals(intervals: list) -> list:
+    """Merges overlapping or directly adjacent [start, end] line intervals."""
+    if not intervals:
+        return []
+    ordered = sorted([[int(i[0]), int(i[1])] for i in intervals], key=lambda x: x[0])
+    merged = [ordered[0]]
+    for interval in ordered[1:]:
+        if merged[-1][1] < interval[0] - 1:
+            merged.append(interval)
+        else:
+            merged[-1][1] = max(merged[-1][1], interval[1])
+    return merged
+
+
+def compute_partial_intervals(total_lines: int, blocks: list[dict]) -> list:
+    """Expands each block by its own pad, then merges the resulting windows.
+
+    Blocks without an explicit pad fall back to the narrow AST default, so a
+    wide search window and a tight function window can coexist in one file.
+    """
+    if total_lines <= 0:
+        return []
+    intervals = []
+    for b in blocks:
+        pad = b.get("pad", DEFAULT_BLOCK_PAD)
+        start = max(0, b.get("start", 0) - pad)
+        end = min(total_lines - 1, b.get("end", 0) + pad)
+        if end >= start:
+            intervals.append([start, end])
+    return merge_line_intervals(intervals)
+
+
+def partial_coverage_ratio(total_lines: int, blocks: list[dict]) -> float:
+    """Fraction of the file that the merged context windows would expose."""
+    if total_lines <= 0:
+        return 1.0
+    merged = compute_partial_intervals(total_lines, blocks)
+    covered = sum(iv[1] - iv[0] + 1 for iv in merged)
+    return min(1.0, covered / total_lines)
+
+
+def render_partial_content(content: str, blocks: list[dict]) -> str:
+    """Renders only the padded windows around `blocks`, with line-numbered gaps.
+
+    Line numbers in the gap markers are 1-indexed and inclusive so the model can
+    always tell where in the original file a given block sits.
+    """
+    if not blocks:
+        return content
+    lines = content.splitlines(keepends=True)
+    if not lines:
+        return content
+
+    merged = compute_partial_intervals(len(lines), blocks)
+    if not merged:
+        return content
+
+    out = []
+    if merged[0][0] > 0:
+        out.append(f"// ... (lines 1-{merged[0][0]} hidden) ...\n\n")
+
+    prev_end = None
+    for interval in merged:
+        if prev_end is not None:
+            out.append(f"\n// ... (lines {prev_end + 2}-{interval[0]} hidden) ...\n\n")
+        out.append("".join(lines[interval[0]:interval[1] + 1]))
+        prev_end = interval[1]
+
+    if prev_end is not None and prev_end < len(lines) - 1:
+        out.append(f"\n// ... (lines {prev_end + 2}-{len(lines)} hidden) ...\n")
+    return "".join(out)
+
 
 def is_binary_file(filepath: str) -> bool:
     """Check if a file is binary by extension or by looking for null bytes in the first 8192 bytes."""
@@ -424,7 +545,24 @@ def parse_xml_to_dict(xml_str: str) -> dict:
             if path:
                 funcs.append({"path": path, "names": names})
         data["functions"] = funcs
-        
+    # Handle SELECT searches
+    searches_m = re.search(r'<searches>(.*?)</searches>', xml_str, re.DOTALL)
+    if searches_m:
+        searches = []
+        for item in re.findall(r'<query_item>(.*?)</query_item>', searches_m.group(1), re.DOTALL):
+            s_query = get_tag_val(item, "query")
+            if not s_query:
+                continue
+            s_regex = get_tag_val(item, "regex")
+            s_case = get_tag_val(item, "case_sensitive")
+            searches.append({
+                "path": get_tag_val(item, "path"),
+                "query": s_query,
+                "regex": bool(s_regex) and str(s_regex).strip().lower() == "true",
+                "case_sensitive": not (s_case and str(s_case).strip().lower() == "false")
+            })
+        data["search"] = searches
+
     # Handle TASK queries
     mega = get_tag_val(xml_str, "mega_task_name")
     if mega: data["mega_task_name"] = mega
