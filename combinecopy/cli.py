@@ -650,7 +650,6 @@ def main():
         args.mobile = False
     elif is_termux():
         args.mobile = True
-
     if args.mobile_doctor:
         run_doctor(console)
         return
@@ -658,6 +657,9 @@ def main():
     if args.install_url_opener:
         install_url_opener(console, force=args.force)
         return
+
+    if args.file_culling and not (args.system_only or args.json_select):
+        args.select = True
 
     if args.mobile:
         ensure_inbox_dir()
@@ -1036,43 +1038,45 @@ def main():
                         file_context_buffer.append("\n--- SYSTEM NOTE: CONTEXT PRUNING ---")
                         file_context_buffer.append(get_prune(args.xml))
                         file_context_buffer.append("")
-                        
                     file_context_str = "\n".join(file_context_buffer)
-                    full_text = ""
-                    if batch_count == 1:
-                        if user_request_data:
-                            full_text = build_prompt(
-                                user_request=user_request_data["request"],
-                                file_context=file_context_str,
-                                ast_map=generate_tree_string(found_files, root_dir) if args.file_culling else "",
-                                file_cull=args.file_culling,
-                                system_prompt=user_request_data["system"],
-                                agent_type=agent_type,
-                                xml_mode=args.xml,
-                                consult=args.consult,
-                                custom_rules=custom_rules,
-                                git_diff=git_diff_text,
-                                rehab=args.rehab,
-                                divide=args.divide
-                            )
-                        else:
-                            full_text = file_context_str
-                    if git_diff_text:
-                        full_text += f"\n\n{get_git_diff(git_diff_text)}"
+                    ast_map_str = generate_tree_string(found_files, root_dir) if args.file_culling else ""
+
+                    if batch_count == 1 and user_request_data:
+                        full_text = build_prompt(
+                            user_request=user_request_data["request"],
+                            file_context=file_context_str,
+                            ast_map=ast_map_str,
+                            file_cull=args.file_culling,
+                            system_prompt=user_request_data["system"],
+                            agent_type=agent_type,
+                            xml_mode=args.xml,
+                            consult=args.consult,
+                            custom_rules=custom_rules,
+                            git_diff=git_diff_text,
+                            rehab=args.rehab,
+                            divide=args.divide
+                        )
                     else:
                         parts = []
                         if batch_num == 1 and user_request_data:
                             parts.append(get_user_prompt(user_request_data["request"]))
-                            if args.file_culling:
-                                parts.append(get_ast(generate_tree_string(found_files, root_dir)))
-                            parts.append(get_file_context(file_context_str))
+                            if ast_map_str:
+                                parts.append(get_ast(ast_map_str))
+                            if file_context_str:
+                                parts.append(get_file_context(file_context_str))
                             if git_diff_text:
                                 parts.append(get_git_diff(git_diff_text))
                             parts.append(get_user_prompt(user_request_data["request"]))
                             parts.append(f"--- SYSTEM INSTRUCTIONS ---\n{user_request_data['system']}")
                         else:
-                            parts.append(file_context_str)
-                            if batch_num == 1 and git_diff_text and not user_request_data:
+                            if batch_num == 1 and ast_map_str:
+                                parts.append(get_ast(ast_map_str))
+                                if file_context_str:
+                                    parts.append(get_file_context(file_context_str))
+                            else:
+                                if file_context_str:
+                                    parts.append(file_context_str)
+                            if batch_num == 1 and git_diff_text:
                                 parts.append(get_git_diff(git_diff_text))
                         if batch_num == batch_count and user_request_data:
                             parts.append(get_user_prompt(user_request_data["request"], reminder=True))
