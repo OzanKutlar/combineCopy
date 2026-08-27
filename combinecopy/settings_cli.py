@@ -5,7 +5,7 @@ import os
 from rich import box
 from rich.table import Table
 
-from combinecopy.mobile.env import detect_available_editors, editor_display_name
+from combinecopy.mobile.env import detect_available_editors
 from combinecopy.settings import (
     CHOICES,
     DEFAULTS,
@@ -81,8 +81,63 @@ def _pick(console, keys, token):
     return keys[index]
 
 
+def _prompt_editor(console, current):
+    """Editor picker. Drawn once, then loops on the choice only.
+
+    This is deliberately reached before the generic value loop, so the menu is
+    the first thing the user sees rather than the second.
+    """
+    try:
+        presets = detect_available_editors()
+    except Exception:
+        presets = []
+
+    console.print()
+    console.print('[bold cyan]Choose an editor, or enter a command using ${file} as the path placeholder.[/bold cyan]')
+    console.print(f"[dim]Current: {current if current else 'auto'}[/dim]")
+    console.print('  [cyan]0.[/cyan] auto [dim](Notepad++ then Notepad on Windows; micro, nano then vi elsewhere)[/dim]')
+    for position, preset in enumerate(presets, start=1):
+        console.print(f'  [cyan]{position}.[/cyan] {preset[1]} [dim]{preset[2]}[/dim]')
+    console.print('  [cyan]c.[/cyan] Custom command [dim](e.g. code --wait ${file})[/dim]')
+
+    for _ in range(_MAX_ATTEMPTS):
+        answer = console.input('[bold]Editor (Enter to keep): [/bold]').strip()
+        if not answer:
+            return current
+
+        lowered = answer.lower()
+        if lowered in ('0', 'auto', 'none', 'clear'):
+            return None
+
+        if lowered == 'c':
+            custom = console.input('[bold]Command template: [/bold]').strip()
+            if not custom:
+                return current
+            if '${file}' not in custom and '$file' not in custom:
+                console.print('[dim]No ${file} placeholder, so the path will be appended to the end.[/dim]')
+            return custom
+
+        if answer.isdigit():
+            index = int(answer) - 1
+            if 0 <= index < len(presets):
+                return presets[index][2]
+            console.print('[red]That number is not in the list.[/red]')
+            continue
+
+        # Anything else is a command the user typed straight in, which is the
+        # natural thing to do at this prompt.
+        if '${file}' not in answer and '$file' not in answer:
+            console.print('[dim]No ${file} placeholder, so the path will be appended to the end.[/dim]')
+        return answer
+
+    console.print('[yellow]Too many invalid entries; the editor was left unchanged.[/yellow]')
+    return current
+
+
 def _prompt_value(console, key, current):
     kind = DEFAULTS[key][0]
+    if key == 'editor':
+        return _prompt_editor(console, current)
     if kind == 'bool':
         return not bool(current)
     if kind == 'nullable-bool':
@@ -113,29 +168,6 @@ def _prompt_value(console, key, current):
         if kind == 'list':
             return [] if raw.lower() in ('none', 'clear') else raw.split()
         if kind == 'nullable-str':
-            if key == 'editor':
-                detected = detect_available_editors()
-                console.print("\n[bold cyan]Choose an editor or enter a custom command (${file} as file placeholder):[/bold cyan]")
-                console.print("  [cyan]0.[/cyan] auto (Default: Notepad++ on Win, micro on POSIX)")
-                for i, (ident, label, tmpl) in enumerate(detected, 1):
-                    console.print(f"  [cyan]{i}.[/cyan] {label} [dim]({tmpl})[/dim]")
-                console.print("  [cyan]C.[/cyan] Custom command (e.g. [green]code --wait ${file}[/green] or [green]micro ${file}[/green])")
-                
-                sub_ans = console.input("[bold]Editor Choice (0-" + str(len(detected)) + "/C/Enter to keep): [/bold]").strip()
-                if not sub_ans:
-                    return current
-                if sub_ans == '0' or sub_ans.lower() in ('auto', 'none', 'clear'):
-                    return None
-                if sub_ans.isdigit():
-                    idx = int(sub_ans) - 1
-                    if 0 <= idx < len(detected):
-                        return detected[idx][2]
-                    console.print("[red]Invalid selection.[/red]")
-                    continue
-                if sub_ans.upper() == 'C':
-                    custom_cmd = console.input("[bold]Custom command template: [/bold]").strip()
-                    return custom_cmd if custom_cmd else current
-                return sub_ans
             return None if raw.lower() in ('none', 'auto', 'clear') else raw
         if kind == 'bool-or-str':
             parsed = parse_bool_word(raw)
