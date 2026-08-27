@@ -228,7 +228,7 @@ When any setting differs from its built-in default, a dim one-line banner names 
 | `batches` | number | 1 | Default batch count |
 | `file_types` | list | none | Default extension filter |
 | `exclude` | list | none | Directories to always skip |
-| `editor` | text | auto | Editor command override |
+| `editor` | text | auto | Preferred editor (Notepad++, micro, nano, or custom command with `${file}`) |
 
 > [!NOTE]
 > A settings file containing `{"auto": true, "tfs": true}` makes a bare `combineCopy` start a TFS-mode listener. That is deliberate, and the banner will say so, but it is worth knowing before you save it.

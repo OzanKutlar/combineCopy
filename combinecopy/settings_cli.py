@@ -5,6 +5,7 @@ import os
 from rich import box
 from rich.table import Table
 
+from combinecopy.mobile.env import detect_available_editors, editor_display_name
 from combinecopy.settings import (
     CHOICES,
     DEFAULTS,
@@ -112,6 +113,29 @@ def _prompt_value(console, key, current):
         if kind == 'list':
             return [] if raw.lower() in ('none', 'clear') else raw.split()
         if kind == 'nullable-str':
+            if key == 'editor':
+                detected = detect_available_editors()
+                console.print("\n[bold cyan]Choose an editor or enter a custom command (${file} as file placeholder):[/bold cyan]")
+                console.print("  [cyan]0.[/cyan] auto (Default: Notepad++ on Win, micro on POSIX)")
+                for i, (ident, label, tmpl) in enumerate(detected, 1):
+                    console.print(f"  [cyan]{i}.[/cyan] {label} [dim]({tmpl})[/dim]")
+                console.print("  [cyan]C.[/cyan] Custom command (e.g. [green]code --wait ${file}[/green] or [green]micro ${file}[/green])")
+                
+                sub_ans = console.input("[bold]Editor Choice (0-" + str(len(detected)) + "/C/Enter to keep): [/bold]").strip()
+                if not sub_ans:
+                    return current
+                if sub_ans == '0' or sub_ans.lower() in ('auto', 'none', 'clear'):
+                    return None
+                if sub_ans.isdigit():
+                    idx = int(sub_ans) - 1
+                    if 0 <= idx < len(detected):
+                        return detected[idx][2]
+                    console.print("[red]Invalid selection.[/red]")
+                    continue
+                if sub_ans.upper() == 'C':
+                    custom_cmd = console.input("[bold]Custom command template: [/bold]").strip()
+                    return custom_cmd if custom_cmd else current
+                return sub_ans
             return None if raw.lower() in ('none', 'auto', 'clear') else raw
         if kind == 'bool-or-str':
             parsed = parse_bool_word(raw)

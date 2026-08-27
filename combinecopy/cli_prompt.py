@@ -13,7 +13,7 @@ import tempfile
 
 from rich.rule import Rule
 
-from combinecopy.mobile.env import editor_display_name, resolve_editor
+from combinecopy.mobile.env import editor_display_name, run_editor
 from combinecopy.utils import (
     console,
     load_default_rules,
@@ -133,22 +133,15 @@ class CliPromptSession:
 
     # --- editor handoff -------------------------------------------------
 
-    def _editor_command(self):
-        if self.editor_override:
-            return [self.editor_override]
-        return resolve_editor()
-
     def _open_in_editor(self, text, suffix='.txt'):
-        command = self._editor_command()
-        if not command:
-            console.print('[red]No editor found. Set the editor setting, or install micro/nano.[/red]')
-            return None
-
         fd, path = tempfile.mkstemp(prefix='combineCopy_', suffix=suffix, text=True)
         try:
             with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as handle:
                 handle.write(text or '')
-            subprocess.run(list(command) + [path], check=False)
+            success = run_editor(path, custom_override=self.editor_override)
+            if not success:
+                console.print('[red]Editor launch failed. Verify your editor setting.[/red]')
+                return None
             with open(path, 'r', encoding='utf-8') as handle:
                 return handle.read()
         except Exception as error:
@@ -167,7 +160,7 @@ class CliPromptSession:
         if edited is None:
             return
         self.lines = _split_lines(edited)
-        console.print(f'[green]Request updated from {editor_display_name()} ({len(self.lines)} line(s)).[/green]')
+        console.print(f'[green]Request updated from {editor_display_name(self.editor_override)} ({len(self.lines)} line(s)).[/green]')
 
     def _action_system(self):
         edited = self._open_in_editor(self.sys_prompt, suffix='.md')

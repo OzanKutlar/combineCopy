@@ -74,38 +74,127 @@ def has_keyboard_hook() -> bool:
         return False
 
 
-def resolve_editor() -> list[str] | None:
-    """Returns an argv prefix for a blocking editor, or None if none is found.
+import shlex
+import subprocess
 
-    Consolidates the Notepad++ lookup that was previously duplicated across
-    tui/apply.py, tui/prompt.py and tui/rules.py.
+
+def find_notepad_plus_plus() -> str | None:
+    """Locates Notepad++ executable if installed."""
+    npp = shutil.which("notepad++") or shutil.which("notepad++.exe")
+    if npp:
+        return npp
+    for path in _WINDOWS_NPP_PATHS:
+        if os.path.exists(path):
+            return path
+    return None
+
+
+def detect_available_editors() -> list[tuple[str, str, str]]:
+    """Probes the system for known text editors.
+    Returns list of (identifier, display_name, command_template).
     """
+    detected = []
+    npp = find_notepad_plus_plus()
+    if npp:
+        detected.append(("notepad++", "Notepad++", f'"{npp}" -multiInst -nosession ${{file}}'))
+    
+    if shutil.which("notepad") or os.name == "nt":
+        detected.append(("notepad", "Notepad", "notepad ${file}"))
+        
+    for name in ("micro", "nano", "vi", "vim", "nvim", "helix", "hx", "emacs", "code", "subl"):
+        if shutil.which(name):
+            label = name.capitalize() if name in ("nano", "micro", "code", "subl", "helix", "emacs") else name
+            detected.append((name, label, f"{name} ${{file}}"))
+            
     env_editor = os.environ.get("EDITOR", "").strip()
+    if env_editor and not any(d[0] == env_editor for d in detected):
+        detected.append(("env_editor", f"$EDITOR ({env_editor})", f"{env_editor} ${{file}}"))
+        
+    return detected
 
+
+def resolve_editor(custom_override: str | None = None) -> list[str] | None:
+    """Returns an argv prefix for a blocking editor, or None if none is found."""
+    if custom_override and custom_override.strip() and custom_override.strip().lower() not in ("auto", "none"):
+        raw = custom_override.strip()
+        if "${file}" in raw or "$file" in raw:
+            return [raw]
+        try:
+            return shlex.split(raw, posix=(os.name != "nt"))
+        except Exception:
+            return [raw]
+
+    # Default lookup: Notepad++ if found, otherwise Notepad on Windows.
     if os.name == "nt":
-        npp = shutil.which("notepad++") or shutil.which("notepad++.exe")
-        if not npp:
-            for path in _WINDOWS_NPP_PATHS:
-                if os.path.exists(path):
-                    npp = path
-                    break
+        npp = find_notepad_plus_plus()
         if npp:
             return [npp, "-multiInst", "-nosession"]
+        env_editor = os.environ.get("EDITOR", "").strip()
         if env_editor:
             return [env_editor]
         return ["notepad"]
 
+    # Linux / Termux / macOS default: micro -> nano -> vi -> $EDITOR
     for name in _TERMINAL_EDITORS:
         found = shutil.which(name)
         if found:
             return [found]
+    env_editor = os.environ.get("EDITOR", "").strip()
     if env_editor:
         return [env_editor]
-    return None
+    return ["vi"]
 
 
-def editor_display_name() -> str:
-    cmd = resolve_editor()
+def build_editor_command(filepath: str, custom_override: str | None = None, line_number: int | None = None) -> list[str]:
+    """Builds the full command arguments list to open `filepath` in the target editor."""
+    raw = (custom_override or "").strip()
+    if raw and raw.lower() not in ("auto", "none"):
+        if "${file}" in raw or "$file" in raw:
+            formatted = raw.replace("${file}", filepath).replace("$file", filepath)
+            try:
+                return shlex.split(formatted, posix=(os.name != "nt"))
+            except Exception:
+                return [formatted]
+        try:
+            argv = shlex.split(raw, posix=(os.name != "nt"))
+        except Exception:
+            argv = [raw]
+        if line_number:
+            base = os.path.basename(argv[0]).lower()
+            if "notepad++" in base:
+                argv.append(f"-n{line_number}")
+            elif base.split(".")[0] in ("micro", "nano", "vi", "vim", "nvim"):
+                argv.append(f"+{line_number}")
+        argv.append(filepath)
+        return argv
+
+    base_cmd = resolve_editor()
+    if not base_cmd:
+        return ["notepad" if os.name == "nt" else "vi", filepath]
+
+    argv = list(base_cmd)
+    if line_number:
+        base = os.path.basename(argv[0]).lower()
+        if "notepad++" in base:
+            argv.append(f"-n{line_number}")
+        elif base.split(".")[0] in ("micro", "nano", "vi", "vim", "nvim"):
+            argv.append(f"+{line_number}")
+    argv.append(filepath)
+    return argv
+
+
+def run_editor(filepath: str, custom_override: str | None = None, line_number: int | None = None) -> bool:
+    """Executes the editor synchronously for filepath."""
+    cmd = build_editor_command(filepath, custom_override=custom_override, line_number=line_number)
+    try:
+        subprocess.run(cmd, check=False)
+        return True
+    except Exception:
+        return False
+
+
+def editor_display_name(custom_override: str | None = None) -> str:
+    cmd = build_editor_command("test.txt", custom_override=custom_override)
     if not cmd:
         return "editor"
     return os.path.basename(cmd[0]).replace(".exe", "")
