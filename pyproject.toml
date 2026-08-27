@@ -12,7 +12,11 @@ dependencies = [
     "rich",
     "textual",
     "pyperclip",
-    "flask"
+    "flask",
+    # Pure Python, no compiler, installs cleanly on Termux. Powers the F2/F3 and
+    # Alt+Enter bindings in the CLI request area; cli_prompt.py degrades to a
+    # plain input() loop if it is missing.
+    "prompt_toolkit"
 ]
 
 [project.optional-dependencies]

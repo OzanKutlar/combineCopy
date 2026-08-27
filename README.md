@@ -90,8 +90,16 @@ combineCopy --file-cull -s
 # Complex Mobile App / Multi-language build with Agent Listener
 combineCopy -f gradle kt xml -s -a --system
 ```
-
 ### Command-Line Arguments
+
+Every boolean flag below accepts an explicit off switch, so a default saved in your settings file can be overridden in either direction for a single run:
+
+```bash
+combineCopy --xml off      # equivalently: --xml=off, or --no-xml
+combineCopy --tfs on -f cs # explicitly on, even if the setting says otherwise
+```
+
+The `off` word is only consumed when it appears on its own immediately after the flag, so `combineCopy --xml src/main.py` still treats the path as a path.
 
 #### Path Targets
 
@@ -172,6 +180,86 @@ Two interactive guards keep a sloppy query from swallowing the workspace. If a s
 | :--- | :--- | :--- | :--- |
 | `--file` | Save the generated prompt to a temporary `.txt` file and copy the file object to the clipboard. | false | none |
 | `--system-only` | Copy the raw system prompt text to the clipboard and exit. | false | none |
+---
+
+## Settings
+
+Typing the same four flags every run gets old. `combineCopy` keeps persistent defaults in `~/.configs/combineCopy/settings.json`, alongside the existing AST cache and ignore files.
+
+```bash
+combineCopy --settings          # interactive editor
+combineCopy --settings --list   # print the current values and exit
+combineCopy --settings --reset  # delete the file, back to built-in defaults
+```
+
+The editor is a numbered menu. Booleans toggle when you select them, `mobile` cycles through auto/on/off, and everything else prompts for a value. Nothing is written until you press `s`.
+
+### Precedence
+
+From weakest to strongest:
+
+1. Built-in defaults
+2. `settings.json`
+3. Environment detection (Termux implies mobile mode, but only when `mobile` is left on `auto`)
+4. An explicit flag on the command line
+
+When any setting differs from its built-in default, a dim one-line banner names the ones in play, so a surprising run always explains itself.
+
+### Keys
+
+| Key | Type | Default | Meaning |
+| :--- | :--- | :--- | :--- |
+| `xml` | on/off | off | Ask the AI for XML payloads instead of JSON |
+| `prompt_ui` | `cli` / `tui` | `tui` | How the request area is presented |
+| `tfs` | on/off | off | Use TFVC instead of git |
+| `cli` | on/off | off | Let the AI emit terminal commands |
+| `consult` | on/off | off | Enable the external Expert LLM phase |
+| `rehab` | on/off | off | Enable Rehab (active learning) mode |
+| `divide` | on/off | off | Enable Large Task Mode |
+| `diff` | on/off | off | Inject the uncommitted git diff |
+| `file_culling` | on/off | off | Enable AST map generation |
+| `select` | on/off | off | Launch the file selector TUI |
+| `auto` | on/off | off | Run the continuous listener |
+| `file` | on/off | off | Copy the prompt as a file object |
+| `web_apply` | on/off | off | Enable web macro mode |
+| `mobile` | auto/on/off | auto | `auto` detects Termux |
+| `system` | on/off/path | off | Always inject the system prompt, or point at a custom one |
+| `limit` | number | 100 | Maximum scan depth |
+| `batches` | number | 1 | Default batch count |
+| `file_types` | list | none | Default extension filter |
+| `exclude` | list | none | Directories to always skip |
+| `editor` | text | auto | Editor command override |
+
+> [!NOTE]
+> A settings file containing `{"auto": true, "tfs": true}` makes a bare `combineCopy` start a TFS-mode listener. That is deliberate, and the banner will say so, but it is worth knowing before you save it.
+
+---
+
+## CLI Request Area
+
+Set `prompt_ui` to `cli`, or pass `--prompt-cli`, and the Textual request screen is replaced by a plain terminal input. `--prompt-tui` forces the old screen back for one run.
+
+Type your request across as many lines as you like. Lines beginning with `/` are commands; everything else is text.
+
+| Command | Key | Does |
+| :--- | :--- | :--- |
+| `/notepad`, `/np`, `/editor` | F2 | Opens the buffer in your editor and reads it back |
+| `/rules` | F3 | Browse the rule catalog, edit one, save to `.ccrules` and/or `default_rules.json` |
+| `/system` | none | Edit the system prompt for this run only |
+| `/send`, `/submit` | Alt+Enter | Finish and continue |
+| `/files` | none | List the files currently in context |
+| `/show` | none | Reprint the buffer with line numbers |
+| `/clear` | none | Empty the buffer |
+| `/help` | none | Command list |
+| `/cancel`, `/quit` | Ctrl+C | Abandon the run |
+
+Editing a rule set through `/rules` patches the live `<user_rules>` block exactly as the TUI does, so both paths produce identical prompts.
+
+> [!IMPORTANT]
+> **Ctrl+Enter depends on your terminal.** Most terminals send the same byte for Enter and Ctrl+Enter, so no program can tell them apart there. It works in kitty, WezTerm, Windows Terminal and iTerm2 with CSI-u enabled. **Alt+Enter and `/send` always work.** On Termux, where there are no function keys without the extra-keys row, the slash commands are the primary path.
+
+The key bindings come from `prompt_toolkit`. If it is not installed the area still runs, with slash commands intact and function keys off, and says so on startup.
+
 ---
 
 ## Mobile Mode (Termux)

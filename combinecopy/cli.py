@@ -53,10 +53,21 @@ from combinecopy.tui.selection import run_file_selector
 from combinecopy.tui.prompt import SystemPromptApp
 from combinecopy.tui.confirm import ConfirmCopyApp
 from combinecopy.tui.apply import AutoAgentApp, OrchestratorAgentApp
-
 from combinecopy.mobile.env import is_termux
 from combinecopy.mobile.inbox import ensure_inbox_dir
 from combinecopy.mobile.provision import run_doctor, install_url_opener
+
+from combinecopy.settings import (
+    describe_active,
+    load_settings,
+    normalize_argv,
+    resolve_settings,
+)
+from combinecopy.settings_cli import (
+    print_settings_table,
+    reset_settings,
+    run_settings_editor,
+)
 
 # Beyond this many hits, or this much of the file exposed, we stop and let the
 # user decide rather than silently dumping most of a file into the context.
@@ -612,44 +623,83 @@ def resolve_random_paths(paths: list[str]) -> list[str]:
         else:
             resolved.append(p)
     return resolved
-
 def main():
+    # Rewrite `--xml off` into `--no-xml` before argparse can swallow a path.
+    sys.argv[1:] = normalize_argv(sys.argv[1:])
+
     parser = argparse.ArgumentParser(description="Scan folder and combine file contents to clipboard.")
-    parser.add_argument("-l", "--limit", type=int, default=100, help="Max recursion depth")
+
+    def add_toggle(*names, dest=None, help_text="", off_help=None):
+        """Registers a --flag / --no-flag pair defaulting to None, meaning 'unset'.
+
+        None is what lets the settings file supply the value. An explicit flag
+        in either direction always beats the saved setting.
+        """
+        parser.add_argument(*names, action="store_true", dest=dest, default=None, help=help_text)
+        canonical = dest or names[-1].lstrip('-').replace('-', '_')
+        parser.add_argument(
+            "--no-" + canonical.replace('_', '-'),
+            action="store_false",
+            dest=canonical,
+            default=None,
+            help=off_help if off_help else argparse.SUPPRESS
+        )
+
+    parser.add_argument("-l", "--limit", type=int, default=None, help="Max recursion depth")
     parser.add_argument("paths", nargs='*', help="Specific files or directories to include (bypasses full directory scan)")
     parser.add_argument("-f", "--file_types", nargs='+', default=None, help="File extension filters (separated by space)")
-    parser.add_argument("-b", "--batches", type=int, default=1, help="Number of batches")
+    parser.add_argument("-b", "--batches", type=int, default=None, help="Number of batches")
     parser.add_argument("-e", "--exclude", nargs='+', default=None, help="Directory names to exclude from scan (separated by space)")
-    parser.add_argument("-s", "--select", action="store_true", help="Open TUI to pick files interactively")
-    parser.add_argument("-a", "--auto", action="store_true", help="Run in continuous AI listener mode")
-    parser.add_argument("--rehab", action="store_true", help="Enable Rehab Mode to manually type AI suggestions with Meld verification.")
-    parser.add_argument("-r", "--revert", action="store_true", help="Run in continuous AI listener mode but reverse all changes")
-    parser.add_argument("-o", "--orchestrate", action="store_true", help="Run in orchestrator mode to generate a precise execution plan and prompt.")
-    parser.add_argument("--cli", action="store_true", help="Enable CLI Mode. Allows the AI to output terminal commands to be executed.")
-    parser.add_argument("--web", action="store_true", help="Launch the local web UI server.")
-    parser.add_argument("--web-apply", action="store_true", dest="web_apply", help="Enable web macro mode. Translates applies into simulated keyboard strokes for web IDEs.")
-    parser.add_argument("--tfs", action="store_true", help="Use TFVC (tf.exe) instead of git for checkout and checkin operations.")
+    add_toggle("-s", "--select", help_text="Open TUI to pick files interactively")
+    add_toggle("-a", "--auto", help_text="Run in continuous AI listener mode")
+    add_toggle("--rehab", help_text="Enable Rehab Mode to manually type AI suggestions with Meld verification.")
+    add_toggle("-r", "--revert", help_text="Run in continuous AI listener mode but reverse all changes")
+    add_toggle("-o", "--orchestrate", help_text="Run in orchestrator mode to generate a precise execution plan and prompt.")
+    add_toggle("--cli", help_text="Enable CLI Mode. Allows the AI to output terminal commands to be executed.")
+    add_toggle("--web", help_text="Launch the local web UI server.")
+    add_toggle("--web-apply", dest="web_apply", help_text="Enable web macro mode. Translates applies into simulated keyboard strokes for web IDEs.")
+    add_toggle("--tfs", help_text="Use TFVC (tf.exe) instead of git for checkout and checkin operations.")
     parser.add_argument("--system", nargs='?', const='DEFAULT', default=None, help="Inject system prompt and user instructions. Optionally provide a path to a custom system prompt file.")
+    parser.add_argument("--no-system", action="store_const", const=False, dest="system", help="Never inject the system prompt, overriding the saved setting.")
     parser.add_argument("--system-only", action="store_true", help="Copy only the system prompt to the clipboard and exit.")
-    parser.add_argument("--file", action="store_true", help="Save prompt to a temp file and copy the file to clipboard")
-    parser.add_argument("--file-culling", "--file-cull", action="store_true", dest="file_culling", help="Enable file culling / AST selection mode")
-    parser.add_argument("-js", "--json-select", action="store_true", help="Parse a JSON selection payload from clipboard to automatically select files/functions")
-    parser.add_argument("-x", "--xml", action="store_true", help="Instruct the AI to use XML for payloads instead of JSON to completely avoid quote escaping issues.")
-    parser.add_argument("--consult", action="store_true", help="Enable CONSULT phase for the AI to ask abstract questions to an external LLM.")
-    parser.add_argument("-d", "--diff", action="store_true", help="Inject current uncommitted git diff directly into the prompt context.")
-    parser.add_argument("--divide", action="store_true", help="Enable Large Task Mode to divide complex requests into sub-tasks.")
-    parser.add_argument("-m", "--mobile", action="store_true", help="Enable Mobile (Termux) mode. Ingests payloads via the TUI paste buffer or an editor instead of polling the clipboard.")
-    parser.add_argument("--no-mobile", action="store_true", help="Disable the automatic Termux detection that would otherwise turn mobile mode on.")
+    add_toggle("--file", help_text="Save prompt to a temp file and copy the file to clipboard")
+    add_toggle("--file-culling", "--file-cull", dest="file_culling", help_text="Enable file culling / AST selection mode")
+    add_toggle("-js", "--json-select", dest="json_select", help_text="Parse a JSON selection payload from clipboard to automatically select files/functions")
+    add_toggle("-x", "--xml", help_text="Instruct the AI to use XML for payloads instead of JSON to completely avoid quote escaping issues.")
+    add_toggle("--consult", help_text="Enable CONSULT phase for the AI to ask abstract questions to an external LLM.")
+    add_toggle("-d", "--diff", help_text="Inject current uncommitted git diff directly into the prompt context.")
+    add_toggle("--divide", help_text="Enable Large Task Mode to divide complex requests into sub-tasks.")
+    add_toggle(
+        "-m", "--mobile",
+        help_text="Enable Mobile (Termux) mode. Ingests payloads via the TUI paste buffer or an editor instead of polling the clipboard.",
+        off_help="Disable the automatic Termux detection that would otherwise turn mobile mode on."
+    )
+    parser.add_argument("--prompt-cli", action="store_const", const="cli", dest="prompt_ui", default=None, help="Enter the request and system prompt through the CLI area instead of the TUI.")
+    parser.add_argument("--prompt-tui", action="store_const", const="tui", dest="prompt_ui", help="Force the Textual request TUI, overriding the saved setting.")
+    parser.add_argument("--settings", action="store_true", help="Open the settings editor, then exit.")
+    parser.add_argument("--list", action="store_true", help="With --settings, print the current settings and exit.")
+    parser.add_argument("--reset", action="store_true", help="With --settings, delete the settings file and exit.")
     parser.add_argument("--mobile-doctor", action="store_true", help="Run environment checks for Termux mobile mode and exit.")
     parser.add_argument("--install-url-opener", action="store_true", help="Install the Termux share-sheet hook that drops shared text into ~/.cc_inbox, then exit.")
     parser.add_argument("--force", action="store_true", help="Allow destructive provisioning steps, e.g. overwriting an existing termux-url-opener.")
     args = parser.parse_args()
 
-    # Termux gets mobile mode by default; --no-mobile is the escape hatch.
-    if args.no_mobile:
-        args.mobile = False
-    elif is_termux():
-        args.mobile = True
+    settings = load_settings(console)
+
+    if args.settings:
+        if args.reset:
+            reset_settings(console)
+        elif args.list:
+            print_settings_table(console, settings)
+        else:
+            run_settings_editor(console)
+        return
+
+    # Unset flags take their value from here; Termux detection happens inside.
+    active = resolve_settings(args, settings)
+    if active:
+        console.print(f"[dim]Settings in effect: {describe_active(active)}[/dim]")
+
     if args.mobile_doctor:
         run_doctor(console)
         return
@@ -936,9 +986,17 @@ def main():
                 except Exception as e:
                     console.print(f"[red]Error reading system prompt file: {e}[/red]")
                     return
-                    
-            app = SystemPromptApp(root_dir, found_files, sys_prompt_text)
-            user_request_data = app.run()
+            if getattr(args, 'prompt_ui', 'tui') == 'cli':
+                from combinecopy.cli_prompt import run_cli_prompt
+                user_request_data = run_cli_prompt(
+                    root_dir,
+                    found_files,
+                    sys_prompt_text,
+                    editor_override=getattr(args, 'editor', None)
+                )
+            else:
+                app = SystemPromptApp(root_dir, found_files, sys_prompt_text)
+                user_request_data = app.run()
             if not user_request_data:
                 console.print(Panel("System prompt setup cancelled.", title="Cancelled", style="bold yellow"))
                 return
