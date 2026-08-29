@@ -240,10 +240,10 @@ When any setting differs from its built-in default, a dim one-line banner names 
 Set `prompt_ui` to `cli`, or pass `--prompt-cli`, and the Textual request screen is replaced by a plain terminal input. `--prompt-tui` forces the old screen back for one run.
 
 Type your request across as many lines as you like. Lines beginning with `/` are commands; everything else is text.
-
 | Command | Key | Does |
 | :--- | :--- | :--- |
 | `/notepad`, `/np`, `/editor` | F2 | Opens the buffer in your editor and reads it back |
+| `/micro` | none | Opens directly in micro (falls back to configured editor) |
 | `/rules` | F3 | Browse the rule catalog, edit one, save to `.ccrules` and/or `default_rules.json` |
 | `/system` | none | Edit the system prompt for this run only |
 | `/send`, `/submit` | Alt+Enter | Finish and continue |

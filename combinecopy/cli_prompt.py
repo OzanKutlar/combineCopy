@@ -8,6 +8,7 @@ nothing downstream has to know which one ran.
 
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 
@@ -42,6 +43,7 @@ _COMMANDS = {
     'notepad': 'editor',
     'np': 'editor',
     'editor': 'editor',
+    'micro': 'micro',
     'rules': 'rules',
     'system': 'system',
     'send': 'send',
@@ -56,6 +58,7 @@ _COMMANDS = {
 
 _HELP_ROWS = [
     ('/notepad  (F2)', 'Edit the request in your editor'),
+    ('/micro', 'Open directly in micro (falls back to configured editor)'),
     ('/rules    (F3)', 'Browse, edit and save rule sets'),
     ('/system', 'Edit the system prompt for this run'),
     ('/send     (Alt+Enter)', 'Finish and continue'),
@@ -133,12 +136,13 @@ class CliPromptSession:
 
     # --- editor handoff -------------------------------------------------
 
-    def _open_in_editor(self, text, suffix='.txt'):
+    def _open_in_editor(self, text, suffix='.txt', override=None):
         fd, path = tempfile.mkstemp(prefix='combineCopy_', suffix=suffix, text=True)
         try:
             with os.fdopen(fd, 'w', encoding='utf-8', newline='\n') as handle:
                 handle.write(text or '')
-            success = run_editor(path, custom_override=self.editor_override)
+            chosen_override = override if override is not None else self.editor_override
+            success = run_editor(path, custom_override=chosen_override)
             if not success:
                 console.print('[red]Editor launch failed. Verify your editor setting.[/red]')
                 return None
@@ -161,6 +165,17 @@ class CliPromptSession:
             return
         self.lines = _split_lines(edited)
         console.print(f'[green]Request updated from {editor_display_name(self.editor_override)} ({len(self.lines)} line(s)).[/green]')
+
+    def _action_micro(self):
+        if shutil.which('micro'):
+            edited = self._open_in_editor('\n'.join(self.lines), override='micro ${file}')
+            if edited is None:
+                return
+            self.lines = _split_lines(edited)
+            console.print(f'[green]Request updated from micro ({len(self.lines)} line(s)).[/green]')
+        else:
+            console.print('[dim yellow]micro not found on PATH; falling back to configured editor.[/dim yellow]')
+            self._action_editor()
 
     def _action_system(self):
         edited = self._open_in_editor(self.sys_prompt, suffix='.md')
