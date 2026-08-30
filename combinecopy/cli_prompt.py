@@ -95,22 +95,28 @@ class CliPromptSession:
 
         bindings = KeyBindings()
 
+        def _get_buffer_text(event):
+            try:
+                return event.app.current_buffer.text
+            except Exception:
+                return ''
+
         @bindings.add('f2')
         def _to_editor(event):
-            event.app.exit(result=_ACT_EDITOR)
+            event.app.exit(result=(_ACT_EDITOR, _get_buffer_text(event)))
 
         @bindings.add('f3')
         def _to_rules(event):
-            event.app.exit(result=_ACT_RULES)
+            event.app.exit(result=(_ACT_RULES, _get_buffer_text(event)))
 
         @bindings.add('escape', 'enter')
         def _alt_enter(event):
-            event.app.exit(result=_ACT_SEND)
+            event.app.exit(result=(_ACT_SEND, _get_buffer_text(event)))
 
         try:
-            @bindings.add('c-j')
+            @bindings.add('c-m')
             def _ctrl_enter(event):
-                event.app.exit(result=_ACT_SEND)
+                event.app.exit(result=(_ACT_SEND, _get_buffer_text(event)))
         except Exception:
             # Plenty of terminals send no distinct Ctrl+Enter at all.
             pass
@@ -131,8 +137,12 @@ class CliPromptSession:
     def _read_line(self):
         marker = '> ' if not self.lines else '. '
         if self.session is not None:
-            return self.session.prompt(marker)
-        return input(marker)
+            res = self.session.prompt(marker)
+            if isinstance(res, tuple) and len(res) == 2:
+                act_token, text = res
+                return _KEY_ACTIONS.get(act_token), text
+            return None, res
+        return None, input(marker)
 
     # --- editor handoff -------------------------------------------------
 
@@ -320,43 +330,56 @@ class CliPromptSession:
         self._print_banner()
         while True:
             try:
-                raw = self._read_line()
+                action, text = self._read_line()
             except KeyboardInterrupt:
                 console.print('[yellow]Request entry cancelled.[/yellow]')
                 return None
             except EOFError:
-                raw = '/send'
+                action, text = 'send', ''
 
-            if raw is None:
-                continue
+            if action is not None:
+                if text and text.strip():
+                    self.lines.append(text)
 
-            action = _KEY_ACTIONS.get(raw)
-            if action is None:
-                stripped = raw.strip()
-                if stripped.startswith('/'):
-                    parts = stripped[1:].split(None, 1)
-                    name = parts[0].lower() if parts else ''
-                    action = _COMMANDS.get(name)
-                    if action is None:
-                        console.print(f'[yellow]Unknown command /{name}. Type /help for the list.[/yellow]')
-                        continue
-                else:
-                    self.lines.append(raw)
+                if action == 'send':
+                    finished = self._finish()
+                    if finished is not None:
+                        return finished
                     continue
 
-            if action == 'send':
-                finished = self._finish()
-                if finished is not None:
-                    return finished
+                if action == 'cancel':
+                    console.print('[yellow]Request entry cancelled.[/yellow]')
+                    return None
+
+                handler = getattr(self, '_action_' + action, None)
+                if handler is not None:
+                    handler()
                 continue
 
-            if action == 'cancel':
-                console.print('[yellow]Request entry cancelled.[/yellow]')
-                return None
+            if text is None:
+                continue
 
-            handler = getattr(self, '_action_' + action, None)
-            if handler is not None:
-                handler()
+            stripped = text.strip()
+            if stripped.startswith('/'):
+                parts = stripped[1:].split(None, 1)
+                name = parts[0].lower() if parts else ''
+                cmd_action = _COMMANDS.get(name)
+                if cmd_action is None:
+                    console.print(f'[yellow]Unknown command /{name}. Type /help for the list.[/yellow]')
+                    continue
+                if cmd_action == 'send':
+                    finished = self._finish()
+                    if finished is not None:
+                        return finished
+                    continue
+                if cmd_action == 'cancel':
+                    console.print('[yellow]Request entry cancelled.[/yellow]')
+                    return None
+                handler = getattr(self, '_action_' + cmd_action, None)
+                if handler is not None:
+                    handler()
+            else:
+                self.lines.append(text)
 
 
 def run_cli_prompt(root_dir, files, sys_prompt, editor_override=None):
