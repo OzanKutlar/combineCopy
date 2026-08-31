@@ -523,9 +523,8 @@ def manage_tasks_cli(tasks_data, root_dir, max_depth, ext_filters, exclude_dirs,
                         console.print("[bold yellow]Modification cancelled.[/bold yellow]")
                         continue
                     found_files, imp_files, part_files = selected
-
                 agent_type = "cli" if getattr(args, 'cli', False) else "default"
-                sys_prompt_text = get_system_prompt(agent_type=agent_type, file_cull=True, xml_mode=args.xml, consult=args.consult, custom_rules=custom_rules, rehab=args.rehab, divide=False)
+                sys_prompt_text = get_system_prompt(agent_type=agent_type, file_cull=True, xml_mode=args.xml, consult=args.consult, custom_rules=custom_rules, rehab=args.rehab, divide=False, prune=args.prune)
                 file_context_buffer = []
                 separator = "-" * 35
                 important_set = set(imp_files) if imp_files is not None else set()
@@ -573,7 +572,6 @@ def manage_tasks_cli(tasks_data, root_dir, max_depth, ext_filters, exclude_dirs,
 
                 file_context_str = "\n".join(file_context_buffer)
                 ast_map_str = generate_tree_string(found_files, root_dir)
-
                 full_text = build_prompt(
                     user_request=selected_task.get("sub_prompt", ""),
                     file_context=file_context_str,
@@ -586,7 +584,8 @@ def manage_tasks_cli(tasks_data, root_dir, max_depth, ext_filters, exclude_dirs,
                     custom_rules=custom_rules,
                     git_diff="",
                     rehab=args.rehab,
-                    divide=False
+                    divide=False,
+                    prune=args.prune
                 )
 
                 copy_to_clipboard(full_text)
@@ -669,6 +668,7 @@ def main():
     add_toggle("--consult", help_text="Enable CONSULT phase for the AI to ask abstract questions to an external LLM.")
     add_toggle("-d", "--diff", help_text="Inject current uncommitted git diff directly into the prompt context.")
     add_toggle("--divide", help_text="Enable Large Task Mode to divide complex requests into sub-tasks.")
+    add_toggle("--prune", help_text="Send context pruning instructions with the system prompt.")
     add_toggle(
         "-m", "--mobile",
         help_text="Enable Mobile (Termux) mode. Ingests payloads via the TUI paste buffer or an editor instead of polling the clipboard.",
@@ -729,7 +729,7 @@ def main():
             console.print(f"[dim yellow]Warning: Could not read .ccrules file: {e}[/dim yellow]")
     if args.system_only:
         agent_type = "orchestrator" if args.orchestrate else "cli" if args.cli else "default"
-        sys_prompt = get_system_prompt(agent_type=agent_type, file_cull=args.file_culling, xml_mode=args.xml, consult=args.consult, custom_rules=custom_rules, rehab=args.rehab, divide=args.divide)
+        sys_prompt = get_system_prompt(agent_type=agent_type, file_cull=args.file_culling, xml_mode=args.xml, consult=args.consult, custom_rules=custom_rules, rehab=args.rehab, divide=args.divide, prune=args.prune)
         important = get_system_prompt_important(agent_type=agent_type, xml_mode=args.xml, divide=args.divide)
         
         full_sys_prompt = f"--- SYSTEM INSTRUCTIONS ---\n{sys_prompt}\n\n{important}"
@@ -978,7 +978,7 @@ def main():
             console.print("[bold cyan]Phase: Instruction & System Prompt[/bold cyan]")
             sys_arg = args.system if args.system else 'DEFAULT'
             if sys_arg == 'DEFAULT' or sys_arg == '':
-                sys_prompt_text = get_system_prompt(agent_type=agent_type, file_cull=args.file_culling, xml_mode=args.xml, consult=args.consult, custom_rules=custom_rules, rehab=args.rehab, divide=args.divide)
+                sys_prompt_text = get_system_prompt(agent_type=agent_type, file_cull=args.file_culling, xml_mode=args.xml, consult=args.consult, custom_rules=custom_rules, rehab=args.rehab, divide=args.divide, prune=args.prune)
             else:
                 try:
                     with open(sys_arg, 'r', encoding='utf-8') as f:
@@ -1098,7 +1098,6 @@ def main():
                         file_context_buffer.append("")
                     file_context_str = "\n".join(file_context_buffer)
                     ast_map_str = generate_tree_string(found_files, root_dir) if args.file_culling else ""
-
                     if batch_count == 1 and user_request_data:
                         full_text = build_prompt(
                             user_request=user_request_data["request"],
@@ -1112,7 +1111,8 @@ def main():
                             custom_rules=custom_rules,
                             git_diff=git_diff_text,
                             rehab=args.rehab,
-                            divide=args.divide
+                            divide=args.divide,
+                            prune=args.prune
                         )
                     else:
                         parts = []

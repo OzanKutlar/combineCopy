@@ -892,7 +892,7 @@ Output your evaluation JSON using the REVIEW schema block now.
 """
 
 # --- Composition Functions ---
-def get_system_prompt(agent_type: str = "default", file_cull: bool = False, xml_mode: bool = False, consult: bool = False, custom_rules: str = "", rehab: bool = False, divide: bool = False) -> str:
+def get_system_prompt(agent_type: str = "default", file_cull: bool = False, xml_mode: bool = False, consult: bool = False, custom_rules: str = "", rehab: bool = False, divide: bool = False, prune: bool = False) -> str:
     parts = []
     parts.append(get_introduction(agent_type))
     parts.append(get_execution(agent_type, xml_mode, consult, divide))  # get_execution already includes planning strings internally
@@ -902,6 +902,9 @@ def get_system_prompt(agent_type: str = "default", file_cull: bool = False, xml_
         
     if file_cull:
         parts.append(get_file_cull(xml_mode))
+
+    if prune:
+        parts.append(get_prune(xml_mode))
         
     rest_str = get_rest(agent_type, custom_rules)
     if rest_str:
@@ -920,7 +923,8 @@ def build_prompt(
     custom_rules: str = "",
     git_diff: str = "",
     rehab: bool = False,
-    divide: bool = False
+    divide: bool = False,
+    prune: bool = False
 ) -> str:
     parts = []
     
@@ -941,7 +945,7 @@ def build_prompt(
     if system_prompt:
         parts.append(f"--- SYSTEM INSTRUCTIONS ---\n{system_prompt}")
     else:
-        parts.append(f"--- SYSTEM INSTRUCTIONS ---\n{get_system_prompt(agent_type, file_cull, xml_mode, consult, custom_rules, rehab, divide)}")
+        parts.append(f"--- SYSTEM INSTRUCTIONS ---\n{get_system_prompt(agent_type, file_cull, xml_mode, consult, custom_rules, rehab, divide, prune)}")
         
     if user_request:
         parts.append(get_user_prompt(user_request, reminder=True))
