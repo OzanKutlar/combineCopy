@@ -114,7 +114,7 @@ class CliPromptSession:
             event.app.exit(result=(_ACT_SEND, _get_buffer_text(event)))
 
         try:
-            @bindings.add('c-m')
+            @bindings.add('c-j')
             def _ctrl_enter(event):
                 event.app.exit(result=(_ACT_SEND, _get_buffer_text(event)))
         except Exception:
