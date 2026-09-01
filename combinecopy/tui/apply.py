@@ -1773,6 +1773,7 @@ class AutoAgentApp(App):
                 style = ""
             color = "green" if action == "CREATE" else "yellow" if action == "MODIFY" else "red"
             err_marker = " [bold red](Error)[/bold red]" if errors else ""
+            path_text = f"[bold red]{path}[/bold red]" if errors else path
             warn_marker = ""
             if "Path corrected" in "".join(warnings):
                 warn_marker += " [yellow](Path Corrected)[/yellow]"
@@ -1780,7 +1781,7 @@ class AutoAgentApp(App):
                 warn_marker += " [yellow](Fuzzy Match)[/yellow]"
             if any("Human corrected" in w for w in warnings):
                 warn_marker += " [yellow](Human Corrected)[/yellow]"
-            label_text = f"[{color}]{action}[/{color}] {path}{err_marker}{warn_marker}{status_marker}"
+            label_text = f"[{color}]{action}[/{color}] {path_text}{err_marker}{warn_marker}{status_marker}"
             unique_id = f"file-{idx}-{time.time_ns()}"
             item = ListItem(Label(label_text, classes=style), id=unique_id)
             file_list.append(item)
