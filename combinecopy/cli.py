@@ -52,7 +52,7 @@ from combinecopy.prompts import (
 from combinecopy.tui.selection import run_file_selector
 from combinecopy.tui.prompt import SystemPromptApp
 from combinecopy.tui.confirm import ConfirmCopyApp
-from combinecopy.tui.apply import AutoAgentApp, OrchestratorAgentApp
+from combinecopy.tui.apply import AutoAgentApp
 from combinecopy.mobile.env import is_termux
 from combinecopy.mobile.inbox import ensure_inbox_dir
 from combinecopy.mobile.provision import run_doctor, install_url_opener
@@ -653,7 +653,6 @@ def main():
     add_toggle("-a", "--auto", help_text="Run in continuous AI listener mode")
     add_toggle("--rehab", help_text="Enable Rehab Mode to manually type AI suggestions with Meld verification.")
     add_toggle("-r", "--revert", help_text="Run in continuous AI listener mode but reverse all changes")
-    add_toggle("-o", "--orchestrate", help_text="Run in orchestrator mode to generate a precise execution plan and prompt.")
     add_toggle("--cli", help_text="Enable CLI Mode. Allows the AI to output terminal commands to be executed.")
     add_toggle("--web", help_text="Launch the local web UI server.")
     add_toggle("--web-apply", dest="web_apply", help_text="Enable web macro mode. Translates applies into simulated keyboard strokes for web IDEs.")
@@ -728,7 +727,7 @@ def main():
         except Exception as e:
             console.print(f"[dim yellow]Warning: Could not read .ccrules file: {e}[/dim yellow]")
     if args.system_only:
-        agent_type = "orchestrator" if args.orchestrate else "cli" if args.cli else "default"
+        agent_type = "cli" if args.cli else "default"
         sys_prompt = get_system_prompt(agent_type=agent_type, file_cull=args.file_culling, xml_mode=args.xml, consult=args.consult, custom_rules=custom_rules, rehab=args.rehab, divide=args.divide, prune=args.prune)
         important = get_system_prompt_important(agent_type=agent_type, xml_mode=args.xml, divide=args.divide)
         
@@ -809,32 +808,24 @@ def main():
                 console.print(f"[dim yellow]Warning: Failed to read .cc_tasks.json: {e}[/dim yellow]")
 
     all_known_files = []
-
-    if (args.auto or args.revert or args.orchestrate) and not (args.select or args.file_types or args.paths or args.system is not None or args.cli):
-        if args.orchestrate:
-            app = OrchestratorAgentApp(root_dir, use_file_clipboard=args.file, cli_mode=args.cli, xml_mode=args.xml)
-            result = app.run()
-            if result:
-                console.print(Panel("Orchestrator payload successfully copied to clipboard.", title="Success", style="bold green"))
+    if (args.auto or args.revert) and not (args.select or args.file_types or args.paths or args.system is not None or args.cli):
+        # NOTE: this previously passed web_mode=args.web, which meant --web
+        # accidentally enabled keyboard macro mode. It should track --web-apply,
+        # matching the other AutoAgentApp construction site below.
+        app = AutoAgentApp(root_dir, revert_mode=args.revert, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile)
+        result = app.run()
+        if isinstance(result, dict) and result.get("type") == "task_division":
+            data = result.get("data")
+            tasks_file = os.path.join(root_dir, ".cc_tasks.json")
+            import json
+            with open(tasks_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4)
+            console.print("\n[bold green]Task split payload intercepted![/bold green]")
+            manage_tasks_cli(data, root_dir, max_depth, ext_filters, args.exclude, args, custom_rules)
             return
-        else:
-            # NOTE: this previously passed web_mode=args.web, which meant --web
-            # accidentally enabled keyboard macro mode. It should track --web-apply,
-            # matching the other AutoAgentApp construction site below.
-            app = AutoAgentApp(root_dir, revert_mode=args.revert, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile)
-            result = app.run()
-            if isinstance(result, dict) and result.get("type") == "task_division":
-                data = result.get("data")
-                tasks_file = os.path.join(root_dir, ".cc_tasks.json")
-                import json
-                with open(tasks_file, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, indent=4)
-                console.print("\n[bold green]Task split payload intercepted![/bold green]")
-                manage_tasks_cli(data, root_dir, max_depth, ext_filters, args.exclude, args, custom_rules)
-                return
-            elif result:
-                print_auto_summary(result)
-            return
+        elif result:
+            print_auto_summary(result)
+        return
 
     if args.web:
         from combinecopy.web.server import start_server
@@ -970,8 +961,7 @@ def main():
                 return
     
         display_summary(root_dir, max_depth, ext_filters, batch_count, total_files)
-    
-        agent_type = "orchestrator" if args.orchestrate else "cli" if args.cli else "default"
+        agent_type = "cli" if args.cli else "default"
 
         user_request_data = None
         if args.system is not None or args.cli:
@@ -1185,31 +1175,23 @@ def main():
         console.print()
         console.print(Panel("[bold red]Process interrupted by user (Ctrl+C).[/bold red]", title="Cancelled"))
         return
-        
-    if args.auto or args.revert or args.orchestrate:
-        if args.orchestrate:
-            console.print(f"\n[bold cyan]Phase: Orchestrator Agent Execution[/bold cyan]")
-            app = OrchestratorAgentApp(root_dir, use_file_clipboard=args.file, cli_mode=args.cli, xml_mode=args.xml)
-            result = app.run()
-            if result:
-                console.print(Panel("Orchestrator payload successfully copied to clipboard.", title="Success", style="bold green"))
-        else:
-            phase_name = "Auto Agent Execution (Revert Mode)" if args.revert else "Auto Agent Execution"
-            if args.web_apply:
-                phase_name += " [WEB MACRO MODE]"
-            console.print(f"\n[bold cyan]Phase: {phase_name}[/bold cyan]")
-            app = AutoAgentApp(root_dir, all_known_files, revert_mode=args.revert, ignore_initial_clipboard=True, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile)
-            result = app.run()
-            if isinstance(result, dict) and result.get("type") == "task_division":
-                data = result.get("data")
-                tasks_file = os.path.join(root_dir, ".cc_tasks.json")
-                import json
-                with open(tasks_file, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, indent=4)
-                console.print("\n[bold green]Task split payload intercepted![/bold green]")
-                manage_tasks_cli(data, root_dir, max_depth, ext_filters, args.exclude, args, custom_rules)
-            elif result:
-                print_auto_summary(result)
+    if args.auto or args.revert:
+        phase_name = "Auto Agent Execution (Revert Mode)" if args.revert else "Auto Agent Execution"
+        if args.web_apply:
+            phase_name += " [WEB MACRO MODE]"
+        console.print(f"\n[bold cyan]Phase: {phase_name}[/bold cyan]")
+        app = AutoAgentApp(root_dir, all_known_files, revert_mode=args.revert, ignore_initial_clipboard=True, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile)
+        result = app.run()
+        if isinstance(result, dict) and result.get("type") == "task_division":
+            data = result.get("data")
+            tasks_file = os.path.join(root_dir, ".cc_tasks.json")
+            import json
+            with open(tasks_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4)
+            console.print("\n[bold green]Task split payload intercepted![/bold green]")
+            manage_tasks_cli(data, root_dir, max_depth, ext_filters, args.exclude, args, custom_rules)
+        elif result:
+            print_auto_summary(result)
 
     if zip_path_to_cleanup and os.path.exists(zip_path_to_cleanup):
         console.print()

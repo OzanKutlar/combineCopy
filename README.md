@@ -57,11 +57,6 @@ When running in Rehab Mode, the AI explains the *logical intent* behind its modi
 4. Once you verify or correct your code, you apply the change.
 
 If you get stuck, you can reveal hints progressively or fully reveal the AI's exact code. You can launch Rehab mode globally with the `--rehab` flag to force the AI to write instructions, or you can invoke it on-the-fly in the standard agent listener by selecting a pending file and pressing `t` (Practice).
-
-### Orchestration (Experimental)
-
-Need a massive refactor? Run the orchestrator mode. A reasoning model builds the architectural plan, and downstream models write the actual code. Note that this orchestration mode is currently experimental.
-
 ### External LLM Consult
 
 If the AI gets stuck on a complex problem, it can trigger a consultation phase. It pauses, queries an external expert model, and brings the answers back into your local loop.
@@ -134,7 +129,6 @@ The `off` word is only consumed when it appears on its own immediately after the
 | `--auto` | Run in continuous AI listener mode, monitoring the clipboard for execution payloads. | false | -a |
 | `--rehab` | Enable Active Learning mode. Forces the AI to emit plain-English instructions and hints, hiding the code until you practice writing it yourself. | false | none |
 | `--revert` | Run the continuous listener mode, but reverse all incoming modifications. | false | -r |
-| `--orchestrate` | Run in orchestrator mode to generate execution plans for downstream models. | false | -o |
 | `--cli` | Enable CLI Mode, allowing the LLM to output terminal commands in its payload. | false | none |
 | `--consult` | Enable the consultation phase, permitting the AI to query external Expert LLMs. | false | none |
 | `--xml` | Instruct the AI to output XML payloads instead of JSON, bypassing quote-escaping vulnerabilities. | false | -x |

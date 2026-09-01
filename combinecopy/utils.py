@@ -468,18 +468,10 @@ def parse_xml_to_dict(xml_str: str) -> dict:
     data["phase"] = get_tag_val(xml_str, "phase")
     data["markdown"] = get_tag_val(xml_str, "markdown")
     data["commit_message"] = get_tag_val(xml_str, "commit_message")
-    data["original_request"] = get_tag_val(xml_str, "original_request")
-    data["prompt"] = get_tag_val(xml_str, "prompt")
-    
-    # Handle EXPLORATION req_files
-    req_files_m = re.search(r'<request_files>(.*?)</request_files>', xml_str, re.DOTALL)
-    if req_files_m:
-        data["request_files"] = re.findall(r'<path>(.*?)</path>', req_files_m.group(1), re.DOTALL)
-        
     # Handle files
     files_m = re.search(r'<files>(.*?)</files>', xml_str, re.DOTALL)
     if files_m:
-        if data["phase"] in ("ORCHESTRATE", "SELECT"):
+        if data["phase"] == "SELECT":
             data["files"] = [p.strip() for p in re.findall(r'<path>(.*?)</path>', files_m.group(1), re.DOTALL)]
         else:
             files = []
@@ -617,7 +609,7 @@ def extract_json_from_text(text: str) -> list[str]:
     if code_blocks:
         return code_blocks
     # Strategy B: First { to last } (Heuristic for single payload)
-    if '"phase"' in text and any(k in text for k in ['"EXECUTION"', '"ORCHESTRATE"', '"EXPLORATION"', '"SELECT"', '"CONSULT"', '"TASK"']):
+    if '"phase"' in text and any(k in text for k in ['"EXECUTION"', '"SELECT"', '"CONSULT"', '"TASK"']):
         start_idx = text.find('{')
         end_idx = text.rfind('}')
         if start_idx != -1 and end_idx != -1 and end_idx > start_idx:

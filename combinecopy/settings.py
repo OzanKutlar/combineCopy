@@ -61,7 +61,6 @@ ARG_TOGGLES = {
     'web_apply': 'web_apply',
     'web': None,
     'revert': None,
-    'orchestrate': None,
     'json_select': None,
 }
 
@@ -82,7 +81,6 @@ ARGV_ALIASES = {
     '--web-apply': '--web-apply',
     '--web': '--web',
     '-r': '--revert', '--revert': '--revert',
-    '-o': '--orchestrate', '--orchestrate': '--orchestrate',
     '-js': '--json-select', '--json-select': '--json-select',
     '-m': '--mobile', '--mobile': '--mobile',
     '--system': '--system',
