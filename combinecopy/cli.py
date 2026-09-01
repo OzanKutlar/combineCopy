@@ -650,9 +650,15 @@ def main():
     parser.add_argument("-b", "--batches", type=int, default=None, help="Number of batches")
     parser.add_argument("-e", "--exclude", nargs='+', default=None, help="Directory names to exclude from scan (separated by space)")
     add_toggle("-s", "--select", help_text="Open TUI to pick files interactively")
-    add_toggle("-a", "--auto", help_text="Run in continuous AI listener mode")
+    # --apply is the user-facing name; -a and --auto are kept as aliases so old
+    # scripts and muscle memory keep working. All three share the 'auto' dest,
+    # which is also the settings key, so saved settings files are unaffected.
+    add_toggle("-a", "--apply", "--auto", dest="auto", help_text="Run the apply listener, monitoring the clipboard for execution payloads")
+    # add_toggle derives its off-switch from the dest, so it only produced
+    # --no-auto. Register the matching spelling for the canonical flag too.
+    parser.add_argument("--no-apply", action="store_false", dest="auto", default=None, help=argparse.SUPPRESS)
     add_toggle("--rehab", help_text="Enable Rehab Mode to manually type AI suggestions with Meld verification.")
-    add_toggle("-r", "--revert", help_text="Run in continuous AI listener mode but reverse all changes")
+    add_toggle("-r", "--revert", help_text="Run the apply listener, but reverse all incoming modifications")
     add_toggle("--cli", help_text="Enable CLI Mode. Allows the AI to output terminal commands to be executed.")
     add_toggle("--web", help_text="Launch the local web UI server.")
     add_toggle("--web-apply", dest="web_apply", help_text="Enable web macro mode. Translates applies into simulated keyboard strokes for web IDEs.")
@@ -1202,12 +1208,11 @@ def main():
                 console.print(f"[green]Successfully deleted {os.path.basename(zip_path_to_cleanup)}[/green]")
             except Exception as e:
                 console.print(f"[red]Failed to delete {zip_path_to_cleanup}: {e}[/red]")
-
 def app_main():
-    """Entry point for the 'app' command. Injects the '-a' flag automatically."""
+    """Entry point for the 'app' command. Injects the apply flag automatically."""
     import sys
-    if "-a" not in sys.argv and "--auto" not in sys.argv:
-        sys.argv.insert(1, "-a")
+    if not any(flag in sys.argv for flag in ("-a", "--apply", "--auto")):
+        sys.argv.insert(1, "--apply")
     main()
 
 if __name__ == "__main__":
