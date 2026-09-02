@@ -30,7 +30,7 @@ This extra is deliberately optional because `keyboard` requires root on Linux an
 
 Once installed, you can use the `combineCopy`, `ftpapp`, and `webapp` commands. You also get the `app` shortcut, which automatically runs `combineCopy --apply`.
 
-## Example Usage
+## Example Agentic Usecase
 
 When you run the command `combineCopy`, the tool recursively searches your folders and places every file it finds into your clipboard. Binary files are included by filename, but their contents are not.
 
@@ -230,6 +230,9 @@ It scans your workspace, filters extensions, and drops excluded directories. It 
 Many web-based AI platforms treat uploaded documents as compressed knowledgebases and cannot process the entirety of a document at once. `combineCopy` bypasses this by posting complete files straight into the chat box, so the LLM sees every file and keeps them fully in context.
 
 To keep your token counts low, it uses file culling. It builds an Abstract Syntax Tree (AST) map of your project, so the AI gets the blueprint of your codebase without having to read every single line of code.
+
+> [!TIP]
+> You can review any pending changes visually in Meld with **m**, edit the proposed replacement directly in the right-hand pane, and save before applying.
 
 ### Automated Execution
 
