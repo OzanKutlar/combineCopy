@@ -2216,12 +2216,12 @@ class AutoAgentApp(App):
 
         _write_text_preserving(path_old, old_text, original_newline=nl)
         _write_text_preserving(path_new, new_text, original_newline=nl)
-
-        timer_was_active = False
-        if self.polling_timer and not self.polling_timer.is_paused:
-            self.polling_timer.pause()
-            timer_was_active = True
-
+        # No timer juggling here on purpose. load_payload() pauses polling_timer
+        # the moment a payload is parsed and reset_state() is what resumes it, so
+        # polling is already paused for the whole time a payload is on screen.
+        # Textual's Timer also exposes no public is_paused, so the state cannot be
+        # probed, and resuming here would wake clipboard polling while a payload
+        # is still pending.
         try:
             if not meld_exe:
                 self._fallback_text_diff(path_old, path_new)
@@ -2246,8 +2246,6 @@ class AutoAgentApp(App):
                 except OSError:
                     pass
             self._meld_running = False
-            if timer_was_active and self.polling_timer:
-                self.polling_timer.resume()
             self._update_buttons()
 
     def _absorb_meld_edit(self, idx: int, edited_text: str) -> None:
