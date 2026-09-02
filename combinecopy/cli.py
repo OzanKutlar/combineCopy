@@ -560,15 +560,15 @@ def manage_tasks_cli(tasks_data, root_dir, max_depth, ext_filters, exclude_dirs,
                     for mfw in missing:
                         file_context_buffer.append(f"- {mfw}")
                     file_context_buffer.append("")
-
                 search_note = build_search_note(task_search_report)
                 if search_note:
                     file_context_buffer.append(search_note)
                     
-                file_context_buffer.append("\n--- SYSTEM NOTE: CONTEXT PRUNING ---")
-                from combinecopy.prompts import get_prune
-                file_context_buffer.append(get_prune(args.xml))
-                file_context_buffer.append("")
+                if getattr(args, 'prune', False):
+                    file_context_buffer.append("\n--- SYSTEM NOTE: CONTEXT PRUNING ---")
+                    from combinecopy.prompts import get_prune
+                    file_context_buffer.append(get_prune(args.xml))
+                    file_context_buffer.append("")
 
                 file_context_str = "\n".join(file_context_buffer)
                 ast_map_str = generate_tree_string(found_files, root_dir)
@@ -1087,7 +1087,7 @@ def main():
                     if search_note:
                         file_context_buffer.append(search_note)
 
-                    if args.json_select:
+                    if args.json_select and getattr(args, 'prune', False):
                         from combinecopy.prompts import get_prune
                         file_context_buffer.append("\n--- SYSTEM NOTE: CONTEXT PRUNING ---")
                         file_context_buffer.append(get_prune(args.xml))
