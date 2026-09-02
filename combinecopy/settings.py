@@ -21,6 +21,7 @@ _FALSE_WORDS = {'off', 'false', 'no', 'n', '0', 'disable', 'disabled'}
 DEFAULTS = {
     'xml': ('bool', False, 'Ask the AI for XML payloads instead of JSON'),
     'prompt_ui': ('choice', 'tui', 'Request area style: cli or tui'),
+    'apply_ui': ('choice', 'tui', 'Apply listener style: cli or tui'),
     'tfs': ('bool', False, 'Use TFVC (tf.exe) instead of git'),
     'cli': ('bool', False, 'Let the AI emit terminal commands in its payload'),
     'consult': ('bool', False, 'Enable the external Expert LLM consult phase'),
@@ -42,7 +43,7 @@ DEFAULTS = {
     'editor': ('nullable-str', None, 'Editor command override (auto = detect)'),
 }
 
-CHOICES = {'prompt_ui': ('cli', 'tui')}
+CHOICES = {'prompt_ui': ('cli', 'tui'), 'apply_ui': ('cli', 'tui')}
 
 # argparse dest -> settings key. None means "no persistent setting; off unless asked".
 ARG_TOGGLES = {
@@ -286,6 +287,9 @@ def resolve_settings(args, settings):
 
     if getattr(args, 'prompt_ui', None) is None:
         args.prompt_ui = settings.get('prompt_ui') or 'tui'
+
+    if getattr(args, 'apply_ui', None) is None:
+        args.apply_ui = settings.get('apply_ui') or 'tui'
 
     if getattr(args, 'limit', None) is None:
         args.limit = settings.get('limit', 100)

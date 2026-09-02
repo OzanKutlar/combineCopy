@@ -134,6 +134,8 @@ The `off` word is only consumed when it appears on its own immediately after the
 | :--- | :--- | :--- | :--- |
 | `--select` | Launch the interactive TUI selector to manually filter the context payload. | false | -s |
 | `--system` | Launch a TUI to inject system prompts and user instructions. Accepts an optional path to a custom text file. | none | none |
+| `--prompt-cli`, `--prompt-tui` | Choose terminal input or Textual TUI for the system prompt request area. | tui | none |
+| `--apply-cli`, `--apply-tui` | Choose terminal interface or Textual TUI for the apply listener. | tui | none |
 | `--web` | Launch the local Flask-based Web UI server on `127.0.0.1:5000`. | false | none |
 
 ### Agent & Execution Modes
@@ -292,6 +294,7 @@ When any setting differs from its built-in default, a dim one-line banner names 
 | :--- | :--- | :--- | :--- |
 | `xml` | on/off | off | Ask the AI for XML payloads instead of JSON |
 | `prompt_ui` | `cli` / `tui` | `tui` | How the request area is presented |
+| `apply_ui` | `cli` / `tui` | `tui` | How the apply listener is presented |
 | `tfs` | on/off | off | Use TFVC instead of git |
 | `cli` | on/off | off | Let the AI emit terminal commands |
 | `consult` | on/off | off | Enable the external Expert LLM phase |
@@ -314,6 +317,33 @@ When any setting differs from its built-in default, a dim one-line banner names 
 
 > [!NOTE]
 > A settings file containing `{"auto": true, "tfs": true}` makes a bare `combineCopy` start a TFS-mode listener. That is deliberate, and the banner will say so, but it is worth knowing before you save it.
+
+---
+
+## CLI Apply Listener
+
+Set `apply_ui` to `cli`, or pass `--apply-cli`, and the full-screen Textual apply interface is replaced with a command-line apply session. `--apply-tui` forces the full TUI back for one run.
+
+On launch, the CLI apply listener automatically reads the execution payload currently on your clipboard. If your clipboard is empty or updated, press `r` to reload.
+
+| Command | Description |
+| :--- | :--- |
+| `<number>` | Select a file by index to inspect warnings and errors |
+| `v` | View word-level diff for the selected file |
+| `a` | Apply the selected file |
+| `A` | Apply all pending files |
+| `d` / `D` | Discard selected file / Discard all pending files |
+| `m` | Open the diff in Meld (folds right-pane edits back) or inline diff |
+| `f` | Open broken JSON in your editor to repair and reload |
+| `c` | Commit applied files to VCS (Git or TFS) and exit |
+| `r` | Reload payload from clipboard (or inbox on Termux) |
+| `e` | Copy validation or JSON syntax error to clipboard |
+| `l` | Reprint the pending files table |
+| `?`, `help` | Show command help |
+| `q` | Quit the apply session (always returns summary) |
+
+> [!NOTE]
+> Advanced modal features like Partial Add (`p`), Human Correct (`h`), and Active Learning practice (`t`) are exclusive to the full TUI.
 
 ---
 

@@ -43,18 +43,14 @@ from combinecopy.utils import (
     find_line_number
 )
 
-def _write_text_preserving(path: str, text: str, original_newline: str | None = None) -> None:
-    """Writes `text` to `path` preserving the file's original line endings exactly.
-    Uses surrogateescape so non-UTF8 bytes that were read back can round-trip
-    losslessly, and `newline=\"\"` to disable Python's automatic newline translation.
-    """
-    if original_newline is None:
-        original_newline = "\n"
-    if original_newline and original_newline != "\n":
-        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
-        text = normalized.replace("\n", original_newline)
-    with open(path, "w", encoding="utf-8", errors="surrogateescape", newline="") as f:
-        f.write(text)
+from combinecopy.apply_core import (
+    write_text_preserving as _write_text_preserving,
+    find_partial_matches,
+    normalize_text,
+    validate_file_obj,
+    commit_git,
+    commit_tfs,
+)
 from combinecopy.vcs_tfs import tfs_checkout, tfs_add, tfs_delete, tfs_checkin
 from combinecopy.mobile.inbox import PayloadInbox, read_latest_dropped_file, INBOX_DIR
 from combinecopy.mobile.clipboard import read_text_once
@@ -1470,13 +1466,8 @@ class AutoAgentApp(App):
             self.notify("Consultation results formatted and copied to clipboard!", title="Success")
         self.query_one("#status-label", Label).update("Waiting for AI...")
         self.query_one("#ai-markdown", Markdown).update("**Consultation Complete!**\n\nThe external answers have been copied to your clipboard. Paste them back to the local AI.")
-
     def _normalize_text(self, text: str) -> str:
-        return "\n".join(
-            line.strip()
-            for line in text.strip().split('\n')
-            if line.strip()
-        )
+        return normalize_text(text)
 
     def show_json_error(self, error: json.JSONDecodeError, content: str) -> None:
         self.polling_timer.pause()
@@ -1509,148 +1500,9 @@ class AutoAgentApp(App):
         if self.query("Button#btn-fix-json"):
             self.query_one("#btn-fix-json", Button).disabled = False
     def _find_partial_matches(self, search_text: str, file_text: str) -> list:
-        search_lines = search_text.splitlines()
-        file_lines = file_text.splitlines()
-        if len(search_lines) <= 1: return []
-        search_norm = [line.strip() for line in search_lines]
-        file_norm = [line.strip() for line in file_lines]
-        
-        matcher = difflib.SequenceMatcher(None, search_norm, file_norm)
-        blocks = matcher.get_matching_blocks()
-        candidates = []
-        for block in blocks:
-            if block.size > 0:
-                matched_text = "".join(search_norm[block.a : block.a + block.size])
-                if not matched_text: continue
-                
-                start_line = max(1, block.b - block.a + 1)
-                end_line = min(len(file_lines), block.b - block.a + len(search_lines))
-                
-                candidates.append({
-                    "start_line": start_line,
-                    "end_line": end_line,
-                    "matched_lines": block.size,
-                    "search_lines": len(search_lines),
-                    "coverage": block.size / len(search_lines)
-                })
-                
-        candidates.sort(key=lambda x: (x["matched_lines"], x["coverage"]), reverse=True)
-        unique_cands = {}
-        for c in candidates:
-            key = (c["start_line"], c["end_line"])
-            if key not in unique_cands:
-                unique_cands[key] = c
-            if len(unique_cands) >= 5:
-                break
-                
-        return list(unique_cands.values())
-
+        return find_partial_matches(search_text, file_text)
     def _validate_file_obj(self, file_obj: dict, status_callback=None) -> None:
-        action = file_obj.get("action", "modify").upper()
-        if action == "COMMAND":
-            if "command" not in file_obj:
-                file_obj["_errors"] = ["Missing 'command' key for COMMAND action."]
-            else:
-                file_obj["_errors"] = []
-            return
-            
-        path = file_obj.get("path", "unknown")
-        full_path = os.path.join(self.root_dir, path)
-        errors = []
-        if "_revert_error" in file_obj:
-            errors.append(file_obj["_revert_error"])
-        if not os.path.exists(full_path) and action != "CREATE":
-            filename = os.path.basename(path)
-            if self.known_files:
-                matches = [f for f in self.known_files if os.path.basename(f) == filename]
-                if len(matches) == 1:
-                    correct_path_rel = os.path.relpath(matches[0], self.root_dir)
-                    warn_msg = f"Path corrected from '{path}' to '{correct_path_rel}'."
-                    if warn_msg not in file_obj.setdefault("_warnings", []):
-                        file_obj["_warnings"].append(warn_msg)
-                    file_obj["path"] = correct_path_rel
-                    path = correct_path_rel
-                    full_path = os.path.join(self.root_dir, path)
-                elif len(matches) > 1:
-                    if self.web_mode:
-                        file_obj.setdefault("_warnings", []).append(f"Ambiguous file: '{filename}' found in multiple locations.")
-                    else:
-                        errors.append(f"Ambiguous file: '{filename}' found in multiple locations.")
-                else:
-                    if self.web_mode:
-                        file_obj.setdefault("_warnings", []).append(f"Target file '{path}' does not exist locally.")
-                    else:
-                        errors.append(f"Target file '{path}' does not exist and was not found in context.")
-            else:
-                if self.web_mode:
-                    file_obj.setdefault("_warnings", []).append(f"Target file '{path}' does not exist locally.")
-                else:
-                    errors.append(f"Target file '{path}' does not exist.")
-
-        if action == "MODIFY" and not errors:
-            if "regex_replace" in file_obj and os.path.exists(full_path):
-                if status_callback: status_callback(f"Evaluating regex replacements for {path}...")
-                old_text = safe_read_file(full_path)
-                for b_idx, block in enumerate(file_obj.get("regex_replace", [])):
-                    pattern = block.get("pattern", "")
-                    if pattern:
-                        try:
-                            compiled = re.compile(pattern)
-                            if not compiled.search(old_text):
-                                warn_msg = f"Regex pattern '{pattern}' found no matches."
-                                if warn_msg not in file_obj.setdefault("_warnings", []):
-                                    file_obj["_warnings"].append(warn_msg)
-                        except re.error as e:
-                            errors.append(f"Invalid regex pattern '{pattern}': {e}")
-
-            if "search_replace" in file_obj and os.path.exists(full_path):
-                try:
-                    if status_callback: status_callback(f"Reading {path}...")
-                    old_text = safe_read_file(full_path)
-                    for b_idx, block in enumerate(file_obj.get("search_replace", [])):
-                        if status_callback: status_callback(f"Checking match {b_idx + 1}/{len(file_obj.get('search_replace', []))} in {path}...")
-                        block.pop("_candidates", None)
-                        if "replace" not in block:
-                            errors.append(f"No replacement found for search block {b_idx + 1}.")
-                        search_text = block.get("search", "")
-                        if search_text and search_text not in old_text:
-                            if status_callback: status_callback(f"Searching fuzzy match {b_idx + 1} in {path}...")
-                            normalized_old = self._normalize_text(old_text)
-                            normalized_search = self._normalize_text(search_text)
-                            if normalized_search in normalized_old:
-                                source_lines = old_text.split('\n')
-                                found_exact = False
-                                for i in range(len(source_lines)):
-                                    for j in range(i, len(source_lines)):
-                                        window = '\n'.join(source_lines[i : j + 1])
-                                        nw = self._normalize_text(window)
-                                        if nw == normalized_search:
-                                            block['search'] = window
-                                            warn_msg = f"Used fuzzy matching for search block {b_idx + 1}."
-                                            if warn_msg not in file_obj.setdefault("_warnings", []):
-                                                file_obj["_warnings"].append(warn_msg)
-                                            found_exact = True
-                                            break
-                                        elif len(nw) > len(normalized_search):
-                                            break
-                                    if found_exact:
-                                        break
-                                if not found_exact:
-                                    errors.append(f"Fuzzy match found but couldn't map to original text for block {b_idx+1}.")
-                            else:
-                                if status_callback: status_callback(f"Searching partial matches {b_idx + 1} in {path} (this can take a while)...")
-                                candidates = self._find_partial_matches(search_text, old_text)
-                                if candidates:
-                                    block["_candidates"] = candidates
-                                    block["_original_search"] = search_text
-                                    best_cand = candidates[0]
-                                    cov_pct = int(best_cand["coverage"] * 100)
-                                    errors.append(f"Search block {b_idx + 1} not found. Found partial match covering {best_cand['matched_lines']}/{best_cand['search_lines']} lines ({cov_pct}%) near lines {best_cand['start_line']}-{best_cand['end_line']}. Press 'h' to resolve.")
-                                else:
-                                    errors.append(f"Search block {b_idx + 1} not found. Fuzzy match and partial match also failed.")
-                except Exception as e:
-                    errors.append(f"Error reading file: {e}")
-        file_obj["_errors"] = errors
+        validate_file_obj(file_obj, self.root_dir, self.known_files, web_mode=self.web_mode, status_callback=status_callback)
 
     def load_payload(self, data: dict) -> None:
         self.polling_timer.pause()
@@ -2384,18 +2236,11 @@ class AutoAgentApp(App):
             self._commit_tfs(msg, applied_files, paths_to_stage)
         else:
             self._commit_git(msg, paths_to_stage)
-
     def _commit_git(self, msg: str, paths_to_stage: list[str]) -> None:
-        try:
-            subprocess.run(["git", "add"] + paths_to_stage, cwd=self.root_dir, check=True)
-            subprocess.run(["git", "commit", "-m", msg], cwd=self.root_dir, check=True)
-
-            commit_hash = ""
-            try:
-                commit_hash = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=self.root_dir, text=True).strip()
-            except Exception:
-                pass
-
+        commit_hash, error = commit_git(self.root_dir, msg, paths_to_stage)
+        if error:
+            self.notify(error, title="Error", severity="error")
+        else:
             self.notify("Changes successfully committed to Git! Closing app.", title="Success")
             summary_data = {
                 "commit_message": msg,
@@ -2403,21 +2248,13 @@ class AutoAgentApp(App):
                 "commit_hash": commit_hash
             }
             self.exit(summary_data)
-        except subprocess.CalledProcessError as e:
-            self.notify(f"Git error: {e}", title="Error", severity="error")
-
     def _commit_tfs(self, msg: str, applied_files: list[dict], paths_to_stage: list[str]) -> None:
-        # Separate new files that need tf add
-        add_paths = [f.get("path") for f in applied_files if f.get("action", "").lower() == "create" and f.get("path")]
-        errors = tfs_add(self.root_dir, add_paths)
-        if errors:
-            self.notify(f"TFS add warnings: {'; '.join(errors)}", severity="warning")
-
-        changeset, error = tfs_checkin(self.root_dir, paths_to_stage, msg)
+        changeset, warnings, error = commit_tfs(self.root_dir, msg, applied_files, paths_to_stage)
+        if warnings:
+            self.notify(f"TFS add warnings: {'; '.join(warnings)}", severity="warning")
         if error:
             self.notify(f"TFS checkin error: {error}", title="Error", severity="error")
             return
-
         self.notify(f"Checked in as Changeset #{changeset}! Closing app.", title="Success")
         summary_data = {
             "commit_message": msg,

@@ -53,6 +53,7 @@ from combinecopy.tui.selection import run_file_selector
 from combinecopy.tui.prompt import SystemPromptApp
 from combinecopy.tui.confirm import ConfirmCopyApp
 from combinecopy.tui.apply import AutoAgentApp
+from combinecopy.apply_cli import run_apply_cli
 from combinecopy.mobile.env import is_termux
 from combinecopy.mobile.inbox import ensure_inbox_dir
 from combinecopy.mobile.provision import run_doctor, install_url_opener
@@ -681,6 +682,8 @@ def main():
     )
     parser.add_argument("--prompt-cli", action="store_const", const="cli", dest="prompt_ui", default=None, help="Enter the request and system prompt through the CLI area instead of the TUI.")
     parser.add_argument("--prompt-tui", action="store_const", const="tui", dest="prompt_ui", help="Force the Textual request TUI, overriding the saved setting.")
+    parser.add_argument("--apply-cli", action="store_const", const="cli", dest="apply_ui", default=None, help="Run the apply listener in plain CLI mode instead of Textual TUI.")
+    parser.add_argument("--apply-tui", action="store_const", const="tui", dest="apply_ui", help="Force the Textual apply TUI, overriding the saved setting.")
     parser.add_argument("--settings", action="store_true", help="Open the settings editor, then exit.")
     parser.add_argument("--list", action="store_true", help="With --settings, print the current settings and exit.")
     parser.add_argument("--reset", action="store_true", help="With --settings, delete the settings file and exit.")
@@ -818,8 +821,11 @@ def main():
         # NOTE: this previously passed web_mode=args.web, which meant --web
         # accidentally enabled keyboard macro mode. It should track --web-apply,
         # matching the other AutoAgentApp construction site below.
-        app = AutoAgentApp(root_dir, revert_mode=args.revert, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile)
-        result = app.run()
+        if getattr(args, 'apply_ui', 'tui') == 'cli':
+            result = run_apply_cli(root_dir, revert_mode=args.revert, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile)
+        else:
+            app = AutoAgentApp(root_dir, revert_mode=args.revert, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile)
+            result = app.run()
         if isinstance(result, dict) and result.get("type") == "task_division":
             data = result.get("data")
             tasks_file = os.path.join(root_dir, ".cc_tasks.json")
@@ -1186,8 +1192,11 @@ def main():
         if args.web_apply:
             phase_name += " [WEB MACRO MODE]"
         console.print(f"\n[bold cyan]Phase: {phase_name}[/bold cyan]")
-        app = AutoAgentApp(root_dir, all_known_files, revert_mode=args.revert, ignore_initial_clipboard=True, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile)
-        result = app.run()
+        if getattr(args, 'apply_ui', 'tui') == 'cli':
+            result = run_apply_cli(root_dir, all_known_files, revert_mode=args.revert, ignore_initial_clipboard=True, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile)
+        else:
+            app = AutoAgentApp(root_dir, all_known_files, revert_mode=args.revert, ignore_initial_clipboard=True, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile)
+            result = app.run()
         if isinstance(result, dict) and result.get("type") == "task_division":
             data = result.get("data")
             tasks_file = os.path.join(root_dir, ".cc_tasks.json")
