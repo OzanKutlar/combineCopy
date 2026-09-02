@@ -87,8 +87,7 @@ combineCopy --apply
 The tool reads your clipboard and extracts the file modifications the LLM specified in the JSON. It then shows you those exact changes in a git-diff style view.
 
 ![The apply TUI showing the pending diff](docs/images/09-apply-tui.png)
-
-If you have Meld available, press **m** to open the same diff in a more familiar format.
+If you have Meld available, press **m** to open the same diff in a more familiar format. Any changes made and saved to the right-hand pane in Meld are automatically folded back into the pending changes when Meld closes, updating the proposed replacement before you press **a** to apply.
 
 ![Meld showing the same diff](docs/images/10-meld-diff.png)
 

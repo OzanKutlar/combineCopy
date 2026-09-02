@@ -44,13 +44,19 @@ def has_termux_api() -> bool:
     return shutil.which("termux-clipboard-set") is not None
 
 
-def has_meld() -> bool:
-    if shutil.which("meld") or shutil.which("meld.exe"):
-        return True
+def find_meld() -> str | None:
+    """Locates the Meld executable if installed on the system."""
+    found = shutil.which("meld") or shutil.which("meld.exe")
+    if found:
+        return found
     for path in _WINDOWS_MELD_PATHS:
         if os.path.exists(path):
-            return True
-    return False
+            return path
+    return None
+
+
+def has_meld() -> bool:
+    return find_meld() is not None
 
 
 def has_keyboard_hook() -> bool:

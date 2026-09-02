@@ -272,17 +272,12 @@ class RehabScreen(ModalScreen[bool]):
 
         _write_text_preserving(path_ai, ai_text, original_newline=self.original_newline)
         _write_text_preserving(path_merge, self.original_text, original_newline=self.original_newline)
-
         try:
-            meld_exe = shutil.which("meld") or shutil.which("meld.exe")
+            from combinecopy.mobile.env import find_meld
+            meld_exe = find_meld()
             if not meld_exe:
-                if os.path.exists(r"C:\Program Files (x86)\Meld\Meld.exe"):
-                    meld_exe = r"C:\Program Files (x86)\Meld\Meld.exe"
-                elif os.path.exists(r"C:\Program Files\Meld\Meld.exe"):
-                    meld_exe = r"C:\Program Files\Meld\Meld.exe"
-                else:
-                    self.notify("Meld not found! Please install Meld and add it to PATH.", severity="error")
-                    return
+                self.notify("Meld not found! Please install Meld and add it to PATH.", severity="error")
+                return
 
             self.notify("Launching Meld... Center panel is the target output. Save and close when done.", severity="info")
             process = await asyncio.create_subprocess_exec(meld_exe, path_ai, path_merge, self.temp_human_path)
@@ -1256,6 +1251,7 @@ class AutoAgentApp(App):
         self.consult_mode = consult_mode
         self.rehab_mode = rehab_mode
         self.is_consulting = False
+        self._meld_running = False
         self.ignore_initial_clipboard = ignore_initial_clipboard
         self.last_clipboard = ""
         self.payload = None
@@ -1781,6 +1777,8 @@ class AutoAgentApp(App):
                 warn_marker += " [yellow](Fuzzy Match)[/yellow]"
             if any("Human corrected" in w for w in warnings):
                 warn_marker += " [yellow](Human Corrected)[/yellow]"
+            if any("Meld edited" in w for w in warnings):
+                warn_marker += " [yellow](Meld Edited)[/yellow]"
             label_text = f"[{color}]{action}[/{color}] {path_text}{err_marker}{warn_marker}{status_marker}"
             unique_id = f"file-{idx}-{time.time_ns()}"
             item = ListItem(Label(label_text, classes=style), id=unique_id)
@@ -1822,7 +1820,7 @@ class AutoAgentApp(App):
                 if self.query("Button#btn-partial-add"):
                     self.query_one("#btn-partial-add", Button).disabled = not is_pending
                 if self.query("Button#btn-open-meld"):
-                    self.query_one("#btn-open-meld", Button).disabled = not is_pending
+                    self.query_one("#btn-open-meld", Button).disabled = not is_pending or self._meld_running
                 has_candidates = False
                 for block in selected_file.get("search_replace", []):
                     if "_candidates" in block:
@@ -2186,35 +2184,94 @@ class AutoAgentApp(App):
                 self.notify("No errors for the selected file.", severity="warning")
     def action_open_meld(self) -> None:
         btn = self.query_one("#btn-open-meld", Button)
-        if btn.disabled: return
+        if btn.disabled or self._meld_running or not self.payload:
+            return
         file_list = self.query_one("#file-list", ListView)
-        if file_list.index is not None and self.payload:
-            file_obj = self.payload["files"][file_list.index]
-            path = file_obj.get("path")
-            full_path = os.path.join(self.root_dir, path)
-            old_text = ""
-            nl = "\n"
-            if os.path.exists(full_path):
-                old_text = safe_read_file(full_path)
-                nl = detect_newline(full_path) or "\n"
-            new_text = compute_new_text(file_obj, old_text)
-            
-            fd_old, path_old = tempfile.mkstemp(suffix="_old_" + os.path.basename(path), text=True)
-            fd_new, path_new = tempfile.mkstemp(suffix="_new_" + os.path.basename(path), text=True)
-            os.close(fd_old)
-            os.close(fd_new)
-            
-            _write_text_preserving(path_old, old_text, original_newline=nl)
-            _write_text_preserving(path_new, new_text, original_newline=nl)
-            try:
-                subprocess.Popen(["meld", path_old, path_new])
-                self.notify("Opened file in Meld.", severity="info")
-            except FileNotFoundError:
+        if file_list.index is None or file_list.index >= len(self.payload.get("files", [])):
+            return
+        idx = file_list.index
+        self._meld_running = True
+        self._update_buttons()
+        self.run_worker(self._run_meld_session(idx), exclusive=False)
+
+    async def _run_meld_session(self, idx: int) -> None:
+        from combinecopy.mobile.env import find_meld
+        meld_exe = find_meld()
+
+        file_obj = self.payload["files"][idx]
+        path = file_obj.get("path") or ""
+        full_path = os.path.join(self.root_dir, path)
+        old_text = ""
+        nl = "\n"
+        if os.path.exists(full_path):
+            old_text = safe_read_file(full_path)
+            nl = detect_newline(full_path) or "\n"
+        new_text = compute_new_text(file_obj, old_text)
+
+        base_name = os.path.basename(path) or "file"
+        fd_old, path_old = tempfile.mkstemp(suffix="_old_" + base_name, text=True)
+        fd_new, path_new = tempfile.mkstemp(suffix="_new_" + base_name, text=True)
+        os.close(fd_old)
+        os.close(fd_new)
+
+        _write_text_preserving(path_old, old_text, original_newline=nl)
+        _write_text_preserving(path_new, new_text, original_newline=nl)
+
+        timer_was_active = False
+        if self.polling_timer and not self.polling_timer.is_paused:
+            self.polling_timer.pause()
+            timer_was_active = True
+
+        try:
+            if not meld_exe:
+                self._fallback_text_diff(path_old, path_new)
+                return
+
+            self.notify("Opened in Meld. Edit the right-hand pane and save when ready.", severity="info")
+            proc = await asyncio.create_subprocess_exec(meld_exe, path_old, path_new)
+            await proc.wait()
+
+            edited_text = safe_read_file(path_new)
+            if edited_text == new_text:
+                self.notify("Meld closed. No changes detected.", severity="info")
+            else:
+                self._absorb_meld_edit(idx, edited_text)
+        except Exception as e:
+            self.notify(f"Failed during Meld session: {e}", severity="error")
+        finally:
+            for p in (path_old, path_new):
                 try:
-                    subprocess.Popen(["meld.exe", path_old, path_new])
-                    self.notify("Opened file in Meld.", severity="info")
-                except FileNotFoundError:
-                    self._fallback_text_diff(path_old, path_new)
+                    if os.path.exists(p):
+                        os.remove(p)
+                except OSError:
+                    pass
+            self._meld_running = False
+            if timer_was_active and self.polling_timer:
+                self.polling_timer.resume()
+            self._update_buttons()
+
+    def _absorb_meld_edit(self, idx: int, edited_text: str) -> None:
+        if not self.payload or idx >= len(self.payload.get("files", [])):
+            return
+        file_obj = self.payload["files"][idx]
+        action = file_obj.get("action", "").lower()
+        if action in ("delete", "command"):
+            self.notify(f"Cannot update content for {action} action from Meld.", severity="warning")
+            return
+
+        file_obj["content"] = edited_text
+        file_obj.pop("search_replace", None)
+        file_obj.pop("regex_replace", None)
+
+        warn_msg = "Meld edited: replacement content was hand-edited in Meld."
+        warnings = file_obj.setdefault("_warnings", [])
+        if warn_msg not in warnings:
+            warnings.append(warn_msg)
+
+        self._validate_file_obj(file_obj)
+        self.refresh_file_list()
+        self._render_diff_for_index(idx)
+        self.notify("Updated pending changes with edits from Meld!", severity="success")
 
     def _fallback_text_diff(self, path_old: str, path_new: str) -> None:
         """No Meld (the normal case on Termux) - render a unified diff inline."""
