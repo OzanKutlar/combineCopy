@@ -8,7 +8,9 @@ This tool was originally created as a means for me to give large file contexts t
 
 However, through upgrading and refining it, I have given the tool the ability to edit files, divide tasks between sub-agents, and request more files than its context provides.
 
-How to install the tool can be found under [Installation](#installation), and how to use it can be found under [Example Usage](#example-usage).
+How to install the tool can be found under [Installation](#installation), and a full walkthrough of the agentic loop can be found under [Example Agentic Usecase](#example-agentic-usecase).
+
+For complete scenario walkthroughs, each taking one realistic situation from the first command to the final commit, see the [Use Case Walkthroughs](docs/usecases/README.md).
 
 ## Installation
 
