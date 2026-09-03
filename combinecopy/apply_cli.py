@@ -247,7 +247,12 @@ class ApplyCliSession:
         errors = f.get("_errors", [])
         for e in errors:
             console.print(f"  [bold red]⛔ {e}[/bold red]")
-        console.print("[dim]Press 'v' to view diff, 'm' for Meld, 'a' to apply, 'd' to discard.[/dim]")
+
+        has_cands = any("_candidates" in b for b in f.get("search_replace", []))
+        hints = ["'v' to view diff", "'m' for Meld", "'a' to apply", "'d' to discard"]
+        if has_cands:
+            hints.append("'h' for Human Correct")
+        console.print(f"[dim]Press {', '.join(hints)}.[/dim]")
 
     def _render_selected_diff(self) -> None:
         if self.selected_idx is None or not self.payload:
@@ -416,6 +421,215 @@ class ApplyCliSession:
                         os.remove(p)
                 except OSError:
                     pass
+
+    def _adjust_block_hunk(self, file_obj: dict, block: dict, block_idx: int, old_text: str) -> bool:
+        candidates = block.get("_candidates", [])
+        if not candidates:
+            return False
+
+        source_lines = old_text.splitlines(keepends=True)
+        total_lines = len(source_lines)
+        if total_lines == 0:
+            return False
+
+        orig_search = block.get("_original_search", block.get("search", ""))
+        search_lines_count = len(orig_search.splitlines())
+
+        cand_idx = 0
+        curr_start = candidates[0]["start_line"]
+        curr_end = candidates[0]["end_line"]
+        confirm_armed = False
+
+        def _render_hunk_view():
+            view_start = max(1, curr_start - 3)
+            view_end = min(total_lines, curr_end + 3)
+            cand_info = candidates[cand_idx] if 0 <= cand_idx < len(candidates) else {}
+            cov_pct = int(cand_info.get("coverage", 0) * 100)
+
+            console.print(
+                f"\n[bold cyan]Candidate {cand_idx + 1}/{len(candidates)}[/bold cyan] | "
+                f"Lines [yellow]{curr_start}-{curr_end}[/yellow] (len: {curr_end - curr_start + 1}, original: {search_lines_count}) | "
+                f"Coverage: [magenta]{cov_pct}%[/magenta]"
+            )
+
+            for l_num in range(view_start, view_end + 1):
+                line_content = source_lines[l_num - 1].rstrip("\r\n")
+                if curr_start <= l_num <= curr_end:
+                    prefix = ">"
+                    style = "bold yellow on #3a322d"
+                    num_style = "bold yellow"
+                else:
+                    prefix = " "
+                    style = "dim"
+                    num_style = "dim"
+                console.print(f"  [{num_style}]{prefix} {l_num:>4} |[/{num_style}] [{style}]{line_content}[/{style}]")
+
+        while True:
+            _render_hunk_view()
+            try:
+                prompt_str = "\n[bold cyan]adjust[/bold cyan] (y=accept, n/p=cand, +/-=size, [/]=shift, v=diff, ?=help, q=abort)> "
+                cmd = console.input(prompt_str).strip()
+            except (KeyboardInterrupt, EOFError):
+                console.print("\n[yellow]Hunk adjustment cancelled.[/yellow]")
+                return False
+
+            if not cmd:
+                continue
+
+            if cmd == "y":
+                selected_len = curr_end - curr_start + 1
+                if search_lines_count > 0 and selected_len < search_lines_count * 0.5 and not confirm_armed:
+                    confirm_armed = True
+                    console.print(
+                        f"[bold red]⚠ Warning:[/bold red] Selected window ({selected_len} lines) is much shorter "
+                        f"than search block ({search_lines_count} lines). Duplication likely!\n"
+                        f"Press [bold yellow]y[/bold yellow] again to confirm anyway."
+                    )
+                    continue
+
+                selected_text = "".join(source_lines[curr_start - 1 : curr_end])
+                old_len = len(block.get("search", "").splitlines())
+                new_len = len(selected_text.splitlines())
+                block["search"] = selected_text
+                block.pop("_candidates", None)
+                block.pop("_original_search", None)
+                warn_msg = f"Human corrected search block {block_idx + 1} ({old_len} -> {new_len} lines)."
+                if warn_msg not in file_obj.setdefault("_warnings", []):
+                    file_obj["_warnings"].append(warn_msg)
+                console.print(f"[bold green]✓ Search block {block_idx + 1} updated to lines {curr_start}-{curr_end}.[/bold green]")
+                return True
+
+            confirm_armed = False
+
+            if cmd == "q":
+                return False
+
+            elif cmd == "n":
+                cand_idx = (cand_idx + 1) % len(candidates)
+                curr_start = candidates[cand_idx]["start_line"]
+                curr_end = candidates[cand_idx]["end_line"]
+
+            elif cmd == "p":
+                cand_idx = (cand_idx - 1) % len(candidates)
+                curr_start = candidates[cand_idx]["start_line"]
+                curr_end = candidates[cand_idx]["end_line"]
+
+            elif cmd == "[":
+                if curr_start > 1:
+                    curr_start -= 1
+                    curr_end = max(curr_start, curr_end - 1)
+
+            elif cmd == "]":
+                if curr_end < total_lines:
+                    curr_end += 1
+                    curr_start = min(curr_end, curr_start + 1)
+
+            elif cmd == "{":
+                shift = min(5, curr_start - 1)
+                if shift > 0:
+                    curr_start -= shift
+                    curr_end = max(curr_start, curr_end - shift)
+
+            elif cmd == "}":
+                shift = min(5, total_lines - curr_end)
+                if shift > 0:
+                    curr_end += shift
+                    curr_start = min(curr_end, curr_start + shift)
+
+            elif cmd == "+":
+                curr_start = max(1, curr_start - 1)
+                curr_end = min(total_lines, curr_end + 1)
+
+            elif cmd == "-":
+                if curr_end > curr_start:
+                    curr_start = min(curr_end, curr_start + 1)
+                    curr_end = max(curr_start, curr_end - 1)
+
+            elif cmd == "+t":
+                curr_start = max(1, curr_start - 1)
+
+            elif cmd == "-t":
+                if curr_start < curr_end:
+                    curr_start += 1
+
+            elif cmd == "+b":
+                curr_end = min(total_lines, curr_end + 1)
+
+            elif cmd == "-b":
+                if curr_end > curr_start:
+                    curr_end -= 1
+
+            elif cmd.startswith("r ") or cmd.startswith("r:"):
+                parts = cmd.replace(":", " ").split()[1:]
+                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    s, e = int(parts[0]), int(parts[1])
+                    if 1 <= s <= e <= total_lines:
+                        curr_start, curr_end = s, e
+                    else:
+                        console.print(f"[red]Range out of bounds. File has 1-{total_lines} lines.[/red]")
+                else:
+                    console.print("[red]Invalid format. Use 'r <start_line> <end_line>'.[/red]")
+
+            elif cmd == "v":
+                cand_text = "".join(source_lines[curr_start - 1 : curr_end])
+                replace_text = block.get("replace", "")
+                console.print(Rule(f"[bold cyan]Diff: Current Window (Lines {curr_start}-{curr_end}) vs Replacement[/bold cyan]"))
+                sink = _ConsoleDiffSink(console)
+                render_word_diff(cand_text, replace_text, sink)
+
+            elif cmd in ("?", "help"):
+                console.print(Rule("[bold blue]Hunk Adjuster Commands[/bold blue]"))
+                console.print("  [cyan]y[/cyan]            Accept current window as the replacement target")
+                console.print("  [cyan]n[/cyan] / [cyan]p[/cyan]        Next / Previous candidate partial match")
+                console.print("  [cyan][[/cyan] / [cyan]][/cyan]        Shift window Up / Down by 1 line")
+                console.print("  [cyan]{[/cyan] / [cyan]}[/cyan]        Shift window Up / Down by 5 lines")
+                console.print("  [cyan]+[/cyan] / [cyan]-[/cyan]        Expand / Shrink window top and bottom by 1 line")
+                console.print("  [cyan]+t[/cyan] / [cyan]-t[/cyan]      Expand / Shrink top boundary by 1 line")
+                console.print("  [cyan]+b[/cyan] / [cyan]-b[/cyan]      Expand / Shrink bottom boundary by 1 line")
+                console.print("  [cyan]r <s> <e>[/cyan]   Set explicit line range (1-based)")
+                console.print("  [cyan]v[/cyan]            View word-level diff preview with replacement")
+                console.print("  [cyan]q[/cyan]            Abort and return to file list")
+            else:
+                console.print(f"[yellow]Unknown command '{cmd}'. Type '?' for adjuster help.[/yellow]")
+
+    def _handle_human_correct(self) -> None:
+        if self.selected_idx is None or not self.payload:
+            console.print("[yellow]No file selected. Type a file number first.[/yellow]")
+            return
+
+        files = self.payload.get("files", [])
+        if not (0 <= self.selected_idx < len(files)):
+            return
+
+        f = files[self.selected_idx]
+        if f.get("action", "").lower() != "modify":
+            console.print("[yellow]Human Correct is only available for modified files.[/yellow]")
+            return
+
+        path = f.get("path", "")
+        full_path = os.path.join(self.root_dir, path)
+        if not os.path.exists(full_path):
+            console.print(f"[red]Target file does not exist locally: {path}[/red]")
+            return
+
+        old_text = safe_read_file(full_path)
+        blocks = f.get("search_replace", [])
+        failing_blocks = [(i, b) for i, b in enumerate(blocks) if "_candidates" in b]
+
+        if not failing_blocks:
+            console.print("[yellow]No fixable blocks with partial matches found in this file.[/yellow]")
+            return
+
+        for block_idx, block in failing_blocks:
+            console.print(Rule(f"[bold blue]Human Correct: {path} (Block {block_idx + 1}/{len(blocks)})[/bold blue]"))
+            resolved = self._adjust_block_hunk(f, block, block_idx, old_text)
+            if not resolved:
+                console.print(f"[yellow]Human correction cancelled for block {block_idx + 1}.[/yellow]")
+                break
+
+        validate_file_obj(f, self.root_dir, self.known_files, web_mode=self.web_mode)
+        self._print_files_table()
+        self._print_selected_details()
 
     def _handle_json_fix(self) -> None:
         if not self.broken_json_content:
@@ -604,9 +818,8 @@ class ApplyCliSession:
             elif cmd == "p":
                 console.print("[yellow]Partial Add (p) is only supported in the full TUI. Run without --apply-cli.[/yellow]")
 
-            # NOT IMPLEMENTED: Human Correct
             elif cmd == "h":
-                console.print("[yellow]Human Correct (h) candidate selection is only supported in the full TUI. Run without --apply-cli.[/yellow]")
+                self._handle_human_correct()
 
             # NOT IMPLEMENTED: Rehab Mode practice session
             elif cmd == "t":
@@ -637,6 +850,7 @@ class ApplyCliSession:
         console.print("  [cyan]d[/cyan] / [cyan]D[/cyan]        Discard selected file / Discard all pending")
         console.print("  [cyan]m[/cyan]            Open selected file diff in Meld (folds edits back)")
         console.print("  [cyan]f[/cyan]            Open broken JSON in your editor to repair and reload")
+        console.print("  [cyan]h[/cyan]            Human Correct failing search block via interactive hunk adjuster")
         console.print("  [cyan]c[/cyan]            Commit applied changes to VCS (Git or TFS)")
         console.print("  [cyan]r[/cyan]            Reload inbound payload from clipboard / inbox")
         console.print("  [cyan]e[/cyan]            Copy validation or JSON error to clipboard")
