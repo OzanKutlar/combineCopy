@@ -335,11 +335,11 @@ On launch, the CLI apply listener automatically reads the execution payload curr
 | `d` / `D` | Discard selected file / Discard all pending files |
 | `m` | Open the diff in Meld (folds right-pane edits back) or inline diff |
 | `f` | Open broken JSON in your editor to repair and reload |
+| `h` | Human Correct failing search block via interactive hunk adjuster |
 | `c` | Commit applied files to VCS (Git or TFS) and exit |
 | `r` | Reload payload from clipboard (or inbox on Termux) |
 | `e` | Copy validation or JSON syntax error to clipboard |
-| `l` | Reprint the pending files table |
-| `?`, `help` | Show command help |
+| `l` | Reprint the pending files table || `?`, `help` | Show command help |
 | `q` | Quit the apply session (always returns summary) |
 
 > [!NOTE]
