@@ -92,3 +92,37 @@ def tfs_checkin(root_dir: str, paths: list[str], message: str) -> tuple[str | No
     match = re.search(r"Changeset #?(\d+)", stdout, re.IGNORECASE)
     changeset = match.group(1) if match else None
     return changeset, None
+
+
+def tfs_diff(root_dir: str, path: str = ".") -> tuple[str | None, str | None]:
+    """Capture unified diff and pending changes for path and its subfolders.
+
+    Returns (diff_text, error_message).
+    """
+    try:
+        # Check pending status in the directory and subfolders
+        rc_stat, out_stat, err_stat = _run_tf(["status", path, "/recursive", "/noprompt"], root_dir)
+        if rc_stat != 0:
+            return None, err_stat.strip() or out_stat.strip() or "tf status command failed."
+
+        stat_clean = out_stat.strip()
+        if not stat_clean or "there are no pending changes" in stat_clean.lower():
+            return None, None
+
+        # Query unified diff for edits
+        rc_diff, out_diff, err_diff = _run_tf(["diff", path, "/recursive", "/format:Unified", "/noprompt"], root_dir)
+        diff_clean = out_diff.strip() if out_diff else ""
+
+        parts = [
+            f"--- TFS Pending Changes Status ({path}) ---",
+            stat_clean
+        ]
+        if diff_clean:
+            parts.extend([
+                "\n--- TFS Unified Diff ---",
+                diff_clean
+            ])
+
+        return "\n".join(parts), None
+    except RuntimeError as e:
+        return None, str(e)

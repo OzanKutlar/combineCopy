@@ -685,9 +685,9 @@ def get_rest(agent_type: str = "default", custom_rules: str = "") -> str:
             flags=re.DOTALL
         )
     return text
-
-def get_git_diff(git_diff_text: str) -> str:
-    return f"--- CURRENT UNCOMMITTED GIT DIFF ---\n{git_diff_text}"
+def get_git_diff(git_diff_text: str, tfs_mode: bool = False) -> str:
+    header = "CURRENT UNCOMMITTED TFS DIFF" if tfs_mode else "CURRENT UNCOMMITTED GIT DIFF"
+    return f"--- {header} ---\n{git_diff_text}"
 
 def get_user_prompt(text: str, reminder: bool = False) -> str:
     header = "--- USER REQUEST (Reminder) ---" if reminder else "--- USER REQUEST ---"
@@ -752,7 +752,8 @@ def build_prompt(
     git_diff: str = "",
     rehab: bool = False,
     divide: bool = False,
-    prune: bool = False
+    prune: bool = False,
+    tfs_mode: bool = False
 ) -> str:
     parts = []
     
@@ -766,7 +767,7 @@ def build_prompt(
         parts.append(get_file_context(file_context))
         
     if git_diff:
-        parts.append(get_git_diff(git_diff))
+        parts.append(get_git_diff(git_diff, tfs_mode=tfs_mode))
         
     if user_request:
         parts.append(get_user_prompt(user_request))

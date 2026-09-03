@@ -1002,24 +1002,38 @@ def main():
             if not user_request_data:
                 console.print(Panel("System prompt setup cancelled.", title="Cancelled", style="bold yellow"))
                 return
-
         git_diff_text = ""
         if args.diff:
-            try:
-                out = subprocess.check_output(
-                    ['git', 'diff', 'HEAD'],
-                    cwd=root_dir,
-                    text=True,
-                    errors="replace",
-                    stderr=subprocess.STDOUT
-                )
-                if out.strip():
-                    git_diff_text = out.strip()
-                    console.print("[cyan]ℹ[/cyan] Captured uncommitted git diff.")
-                else:
-                    console.print("[yellow]Warning: --diff flag provided but no git diff found.[/yellow]")
-            except Exception as e:
-                console.print(f"[yellow]Warning: Failed to capture git diff: {e}[/yellow]")
+            if args.tfs:
+                console.print("[cyan]ℹ[/cyan] Querying TFS (tf.exe) for pending changes in current directory and subfolders...")
+                from combinecopy.vcs_tfs import tfs_diff
+                try:
+                    diff_out, err = tfs_diff(root_dir)
+                    if err:
+                        console.print(f"[yellow]Warning: Failed to capture TFS diff: {err}[/yellow]")
+                    elif diff_out and diff_out.strip():
+                        git_diff_text = diff_out.strip()
+                        console.print("[cyan]ℹ[/cyan] Captured uncommitted TFS pending changes diff.")
+                    else:
+                        console.print("[yellow]Warning: --diff flag provided but no TFS pending changes found in current directory or subfolders.[/yellow]")
+                except Exception as e:
+                    console.print(f"[yellow]Warning: Failed to capture TFS diff: {e}[/yellow]")
+            else:
+                try:
+                    out = subprocess.check_output(
+                        ['git', 'diff', 'HEAD'],
+                        cwd=root_dir,
+                        text=True,
+                        errors="replace",
+                        stderr=subprocess.STDOUT
+                    )
+                    if out.strip():
+                        git_diff_text = out.strip()
+                        console.print("[cyan]ℹ[/cyan] Captured uncommitted git diff.")
+                    else:
+                        console.print("[yellow]Warning: --diff flag provided but no git diff found.[/yellow]")
+                except Exception as e:
+                    console.print(f"[yellow]Warning: Failed to capture git diff: {e}[/yellow]")
 
         files_per_batch = math.ceil(total_files / batch_count)
         console.print(f"\n[dim]Splitting into {batch_count} batch(es). ~{files_per_batch} files/batch.[/dim]\n")
@@ -1114,7 +1128,8 @@ def main():
                             git_diff=git_diff_text,
                             rehab=args.rehab,
                             divide=args.divide,
-                            prune=args.prune
+                            prune=args.prune,
+                            tfs_mode=args.tfs
                         )
                     else:
                         parts = []
@@ -1125,7 +1140,7 @@ def main():
                             if file_context_str:
                                 parts.append(get_file_context(file_context_str))
                             if git_diff_text:
-                                parts.append(get_git_diff(git_diff_text))
+                                parts.append(get_git_diff(git_diff_text, tfs_mode=args.tfs))
                             parts.append(get_user_prompt(user_request_data["request"]))
                             parts.append(f"--- SYSTEM INSTRUCTIONS ---\n{user_request_data['system']}")
                         else:
@@ -1137,7 +1152,7 @@ def main():
                                 if file_context_str:
                                     parts.append(file_context_str)
                             if batch_num == 1 and git_diff_text:
-                                parts.append(get_git_diff(git_diff_text))
+                                parts.append(get_git_diff(git_diff_text, tfs_mode=args.tfs))
                         if batch_num == batch_count and user_request_data:
                             parts.append(get_user_prompt(user_request_data["request"], reminder=True))
                             parts.append(get_system_prompt_important(agent_type, xml_mode=args.xml, divide=args.divide))

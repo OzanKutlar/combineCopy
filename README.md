@@ -126,7 +126,7 @@ The `off` word is only consumed when it appears on its own immediately after the
 | `--batches <int>` | Number of batches to split large workspace context copies into. | 1 | -b |
 | `--file-culling`, `--file-cull` | Enable file culling and AST map generation mode. | false | none |
 | `--prune` | Send context pruning instructions with the original system prompt. | false | none |
-| `--diff` | Inject current uncommitted git diff directly into the prompt context. | false | -d |
+| `--diff` | Inject current uncommitted git or TFS diff directly into the prompt context. | false | -d |
 
 ### Interactive & UI Modes
 
@@ -177,7 +177,7 @@ Two interactive guards keep a sloppy query from swallowing the workspace. If a s
 | Option | Description | Default | Alias |
 | :--- | :--- | :--- | :--- |
 | `--web-apply` | Enable web macro mode. Translates AI execution payloads into simulated keyboard strokes for browser-based IDEs. | false | none |
-| `--tfs` | Use TFVC (`tf.exe`) instead of Git for file checkout, addition, deletion, and check-in operations. | false | none |
+| `--tfs` | Use TFVC (`tf.exe`) instead of Git for file checkout, addition, deletion, check-in, and diff operations. | false | none |
 
 ### Mobile (Termux)
 
@@ -300,7 +300,7 @@ When any setting differs from its built-in default, a dim one-line banner names 
 | `consult` | on/off | off | Enable the external Expert LLM phase |
 | `rehab` | on/off | off | Enable Rehab (active learning) mode |
 | `divide` | on/off | off | Enable Large Task Mode |
-| `diff` | on/off | off | Inject the uncommitted git diff |
+| `diff` | on/off | off | Inject the uncommitted git or TFS diff |
 | `file_culling` | on/off | off | Enable AST map generation |
 | `prune` | on/off | off | Send pruning instructions with the system prompt |
 | `select` | on/off | off | Launch the file selector TUI |

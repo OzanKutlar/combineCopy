@@ -27,7 +27,7 @@ DEFAULTS = {
     'consult': ('bool', False, 'Enable the external Expert LLM consult phase'),
     'rehab': ('bool', False, 'Enable Rehab (active learning) mode'),
     'divide': ('bool', False, 'Enable Large Task Mode'),
-    'diff': ('bool', False, 'Inject the uncommitted git diff into the prompt'),
+    'diff': ('bool', False, 'Inject the uncommitted git or TFS diff into the prompt'),
     'file_culling': ('bool', False, 'Enable file culling and AST map generation'),
     'prune': ('bool', False, 'Send context pruning instructions with the system prompt'),
     'select': ('bool', False, 'Launch the file selector TUI'),
