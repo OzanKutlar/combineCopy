@@ -462,12 +462,15 @@ class ApplyCliSession:
                     prefix = " "
                     style = "dim"
                     num_style = "dim"
-                console.print(f"  [{num_style}]{prefix} {l_num:>4} |[/{num_style}] [{style}]{line_content}[/{style}]")
+                row = Text("  ")
+                row.append(f"{prefix} {l_num:>4} | ", style=num_style)
+                row.append(line_content, style=style)
+                console.print(row)
 
         while True:
             _render_hunk_view()
             try:
-                prompt_str = "\n[bold cyan]adjust[/bold cyan] (y=accept, n/p=cand, +/-=size, [/]=shift, v=diff, ?=help, q=abort)> "
+                prompt_str = "\n[bold cyan]adjust[/bold cyan] (y=accept, n/p=cand, +/-=size, \\[\\]=shift, v=diff, ?=help, q=abort)> "
                 cmd = console.input(prompt_str).strip()
             except (KeyboardInterrupt, EOFError):
                 console.print("\n[yellow]Hunk adjustment cancelled.[/yellow]")
@@ -581,7 +584,7 @@ class ApplyCliSession:
                 console.print(Rule("[bold blue]Hunk Adjuster Commands[/bold blue]"))
                 console.print("  [cyan]y[/cyan]            Accept current window as the replacement target")
                 console.print("  [cyan]n[/cyan] / [cyan]p[/cyan]        Next / Previous candidate partial match")
-                console.print("  [cyan][[/cyan] / [cyan]][/cyan]        Shift window Up / Down by 1 line")
+                console.print("  [cyan]\\[[/cyan] / [cyan]\\][/cyan]        Shift window Up / Down by 1 line")
                 console.print("  [cyan]{[/cyan] / [cyan]}[/cyan]        Shift window Up / Down by 5 lines")
                 console.print("  [cyan]+[/cyan] / [cyan]-[/cyan]        Expand / Shrink window top and bottom by 1 line")
                 console.print("  [cyan]+t[/cyan] / [cyan]-t[/cyan]      Expand / Shrink top boundary by 1 line")
