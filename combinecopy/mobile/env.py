@@ -126,7 +126,10 @@ def resolve_editor(custom_override: str | None = None) -> list[str] | None:
         if "${file}" in raw or "$file" in raw:
             return [raw]
         try:
-            return shlex.split(raw, posix=(os.name != "nt"))
+            argv = shlex.split(raw, posix=(os.name != "nt"))
+            if os.name == "nt":
+                argv = [a.strip('"\'') for a in argv]
+            return argv
         except Exception:
             return [raw]
 
@@ -155,23 +158,30 @@ def build_editor_command(filepath: str, custom_override: str | None = None, line
     """Builds the full command arguments list to open `filepath` in the target editor."""
     raw = (custom_override or "").strip()
     if raw and raw.lower() not in ("auto", "none"):
-        if "${file}" in raw or "$file" in raw:
-            formatted = raw.replace("${file}", filepath).replace("$file", filepath)
-            try:
-                return shlex.split(formatted, posix=(os.name != "nt"))
-            except Exception:
-                return [formatted]
         try:
             argv = shlex.split(raw, posix=(os.name != "nt"))
         except Exception:
             argv = [raw]
-        if line_number:
-            base = os.path.basename(argv[0]).lower()
-            if "notepad++" in base:
-                argv.append(f"-n{line_number}")
-            elif base.split(".")[0] in ("micro", "nano", "vi", "vim", "nvim"):
-                argv.append(f"+{line_number}")
-        argv.append(filepath)
+        if os.name == "nt":
+            argv = [a.strip('"\'') for a in argv]
+
+        has_file = any("${file}" in a or "$file" in a for a in argv)
+        if has_file:
+            argv = [a.replace("${file}", filepath).replace("$file", filepath) for a in argv]
+            if line_number and argv:
+                base = os.path.basename(argv[0]).lower()
+                if "notepad++" in base and not any(a.startswith("-n") for a in argv):
+                    argv.insert(1, f"-n{line_number}")
+                elif base.split(".")[0] in ("micro", "nano", "vi", "vim", "nvim") and not any(a.startswith("+") for a in argv):
+                    argv.insert(1, f"+{line_number}")
+        else:
+            if line_number and argv:
+                base = os.path.basename(argv[0]).lower()
+                if "notepad++" in base:
+                    argv.append(f"-n{line_number}")
+                elif base.split(".")[0] in ("micro", "nano", "vi", "vim", "nvim"):
+                    argv.append(f"+{line_number}")
+            argv.append(filepath)
         return argv
 
     base_cmd = resolve_editor()
@@ -195,7 +205,12 @@ def run_editor(filepath: str, custom_override: str | None = None, line_number: i
     try:
         subprocess.run(cmd, check=False)
         return True
-    except Exception:
+    except Exception as e:
+        try:
+            from combinecopy.utils import console
+            console.print(f"[dim red]Editor launch error: {e}[/dim red]")
+        except Exception:
+            pass
         return False
 
 
