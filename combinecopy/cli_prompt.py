@@ -14,7 +14,7 @@ import tempfile
 
 from rich.rule import Rule
 
-from combinecopy.mobile.env import editor_display_name, run_editor
+from combinecopy.mobile.env import editor_display_name, find_notepad_plus_plus, run_editor
 from combinecopy.utils import (
     console,
     load_default_rules,
@@ -40,8 +40,8 @@ _ACT_SEND = '::cc-send::'
 _KEY_ACTIONS = {_ACT_EDITOR: 'editor', _ACT_RULES: 'rules', _ACT_SEND: 'send'}
 
 _COMMANDS = {
-    'notepad': 'editor',
-    'np': 'editor',
+    'notepad': 'notepad',
+    'np': 'notepad',
     'editor': 'editor',
     'micro': 'micro',
     'rules': 'rules',
@@ -57,7 +57,8 @@ _COMMANDS = {
 }
 
 _HELP_ROWS = [
-    ('/notepad  (F2)', 'Edit the request in your editor'),
+    ('/editor   (F2)', 'Edit the request in your configured editor'),
+    ('/notepad, /np', 'Open directly in Notepad++ (falls back to configured editor)'),
     ('/micro', 'Open directly in micro (falls back to configured editor)'),
     ('/rules    (F3)', 'Browse, edit and save rule sets'),
     ('/system', 'Edit the system prompt for this run'),
@@ -175,6 +176,19 @@ class CliPromptSession:
             return
         self.lines = _split_lines(edited)
         console.print(f'[green]Request updated from {editor_display_name(self.editor_override)} ({len(self.lines)} line(s)).[/green]')
+
+    def _action_notepad(self):
+        npp = find_notepad_plus_plus()
+        if npp:
+            override = f'"{npp}" -multiInst -nosession ${{file}}'
+            edited = self._open_in_editor('\n'.join(self.lines), override=override)
+            if edited is None:
+                return
+            self.lines = _split_lines(edited)
+            console.print(f'[green]Request updated from Notepad++ ({len(self.lines)} line(s)).[/green]')
+        else:
+            console.print('[dim yellow]Notepad++ not found; falling back to configured editor.[/dim yellow]')
+            self._action_editor()
 
     def _action_micro(self):
         if shutil.which('micro'):
@@ -314,7 +328,7 @@ class CliPromptSession:
     def _print_banner(self):
         console.print(Rule('[bold blue]Request Area[/bold blue]'))
         console.print(f'[dim]{len(self.files)} file(s) in context. Type your request, then /send (or Alt+Enter).[/dim]')
-        console.print('[dim]/notepad (F2) editor  |  /rules (F3) rule sets  |  /system edit prompt  |  /help[/dim]')
+        console.print('[dim]/editor (F2) default editor  |  /notepad  |  /micro  |  /rules (F3)  |  /help[/dim]')
         if not PROMPT_TOOLKIT_AVAILABLE or self.session is None:
             console.print('[dim yellow]prompt_toolkit is unavailable, so F2/F3/Alt+Enter are off. Slash commands still work.[/dim yellow]')
 

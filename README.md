@@ -355,7 +355,8 @@ Type your request across as many lines as you like. Lines beginning with `/` are
 
 | Command | Key | Does |
 | :--- | :--- | :--- |
-| `/notepad`, `/np`, `/editor` | F2 | Opens the buffer in your editor and reads it back |
+| `/editor` | F2 | Opens the buffer in your configured editor and reads it back |
+| `/notepad`, `/np` | none | Opens directly in Notepad++ (falls back to configured editor) |
 | `/micro` | none | Opens directly in micro (falls back to configured editor) |
 | `/rules` | F3 | Browse the rule catalog, edit one, save to `.ccrules` and/or `default_rules.json` |
 | `/system` | none | Edit the system prompt for this run only |
