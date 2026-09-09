@@ -22,6 +22,7 @@ DEFAULTS = {
     'xml': ('bool', False, 'Ask the AI for XML payloads instead of JSON'),
     'prompt_ui': ('choice', 'tui', 'Request area style: cli or tui'),
     'apply_ui': ('choice', 'tui', 'Apply listener style: cli or tui'),
+    'apply_chain': ('bool', False, 'Allow chained apply commands like 5m or ac'),
     'tfs': ('bool', False, 'Use TFVC (tf.exe) instead of git'),
     'cli': ('bool', False, 'Let the AI emit terminal commands in its payload'),
     'consult': ('bool', False, 'Enable the external Expert LLM consult phase'),
@@ -48,6 +49,7 @@ CHOICES = {'prompt_ui': ('cli', 'tui'), 'apply_ui': ('cli', 'tui')}
 # argparse dest -> settings key. None means "no persistent setting; off unless asked".
 ARG_TOGGLES = {
     'xml': 'xml',
+    'apply_chain': 'apply_chain',
     'tfs': 'tfs',
     'cli': 'cli',
     'consult': 'consult',
@@ -68,6 +70,7 @@ ARG_TOGGLES = {
 # Every spelling the argv pre-pass recognises, mapped to its canonical long flag.
 ARGV_ALIASES = {
     '-x': '--xml', '--xml': '--xml',
+    '--apply-chain': '--apply-chain',
     '--tfs': '--tfs',
     '--cli': '--cli',
     '--consult': '--consult',

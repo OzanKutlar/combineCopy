@@ -39,6 +39,11 @@ class SystemPromptApp(App):
         margin-bottom: 1;
     }
     #left-pane OptionList { height: 1fr; }
+    #file-actions {
+        height: 3;
+        margin-bottom: 1;
+    }
+    #btn-reselect { width: 1fr; }
     TextArea:focus {
         border: double #d08c60;
     }
@@ -54,22 +59,35 @@ class SystemPromptApp(App):
         Binding("ctrl+j", "submit", "Submit Request", show=False),
         Binding("ctrl+enter", "submit", "Submit Request"),
         Binding("f2", "open_editor", "Open in Editor"),
-        Binding("f3", "edit_rules", "Edit Rules")
+        Binding("f3", "edit_rules", "Edit Rules"),
+        Binding("f4", "reselect_files", "Reselect Files")
     ]
     
-    def __init__(self, root_dir: str, files: list[str], sys_prompt: str):
+    def __init__(self, root_dir: str, files: list[str], sys_prompt: str,
+                 important=None, partials=None, max_depth: int = 100,
+                 ext_filters=None, exclude_dirs=None, ast_mode: bool = False):
         super().__init__()
         self.root_dir = root_dir
-        self.files = files
+        self.files = list(files or [])
+        self.important = list(important) if important is not None else list(self.files)
+        self.partials = dict(partials) if partials else {}
+        self.max_depth = max_depth if max_depth is not None else 100
+        self.ext_filters = ext_filters
+        self.exclude_dirs = exclude_dirs
+        self.ast_mode = bool(ast_mode)
+        # Only reported back when the selector actually returned something.
+        self.selection_changed = False
         self.sys_prompt = sys_prompt
         
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="layout"):
             with Vertical(id="left-pane"):
-                yield Label("Files in Context", classes="panel-title")
+                yield Label(f"Files in Context ({len(self.files)})", id="files-title", classes="panel-title")
+                with Horizontal(id="file-actions"):
+                    yield Button("Reselect Files (F4)", id="btn-reselect", variant="warning")
                 rel_files = [os.path.relpath(f, self.root_dir) for f in self.files]
-                yield OptionList(*rel_files)
+                yield OptionList(*rel_files, id="file-list")
             with Vertical(id="right-pane"):
                 yield Label("Your Request / Problem (Ctrl+Enter to Submit):", classes="panel-title")
                 yield TextArea(id="user-request", text="")
@@ -88,6 +106,8 @@ class SystemPromptApp(App):
             self.action_open_editor()
         elif event.button.id == "btn-rules":
             self.action_edit_rules()
+        elif event.button.id == "btn-reselect":
+            self.action_reselect_files()
             
     def action_open_editor(self) -> None:
         btn = self.query_one("#btn-editor", Button)
@@ -148,6 +168,65 @@ class SystemPromptApp(App):
         
     def _enable_editor_button(self) -> None:
         self.query_one("#btn-editor", Button).disabled = False
+    def action_reselect_files(self) -> None:
+        from combinecopy.tui.selection import run_file_selector
+        from combinecopy.utils import get_files_recursive
+
+        scanned = get_files_recursive(
+            self.root_dir, 0, self.max_depth, self.ext_filters,
+            exclude_dirs=self.exclude_dirs
+        )
+        # A file targeted directly on the command line may sit outside the
+        # scan filters. Offering only the scan would silently drop it.
+        for path in self.files:
+            if path not in scanned:
+                scanned.append(path)
+
+        if not scanned:
+            self.notify("The scan found no files to select from.", severity="warning")
+            return
+
+        def _launch():
+            return run_file_selector(
+                self.root_dir,
+                scanned,
+                ast_mode=self.ast_mode,
+                preselected_files=list(self.files),
+                preselected_partials=dict(self.partials)
+            )
+
+        try:
+            # The selector is a Textual App in its own right, so this one has to
+            # release the terminal first. Same handoff the paste buffer uses.
+            suspend = getattr(self, "suspend", None)
+            if suspend is not None:
+                with suspend():
+                    selected = _launch()
+            else:
+                selected = _launch()
+        except Exception as error:
+            self.notify(f"File selector failed: {error}", severity="error")
+            return
+
+        if selected is None:
+            self.notify("Selection cancelled; the context is unchanged.", severity="information")
+            return
+
+        self.files = list(selected[0])
+        self.important = list(selected[1] or [])
+        self.partials = dict(selected[2] or {})
+        self.selection_changed = True
+        self._refresh_file_list()
+
+    def _refresh_file_list(self) -> None:
+        option_list = self.query_one("#file-list", OptionList)
+        option_list.clear_options()
+        for path in self.files:
+            option_list.add_option(os.path.relpath(path, self.root_dir))
+        self.query_one("#files-title", Label).update(f"Files in Context ({len(self.files)})")
+        self.refresh(layout=True)
+        self.notify(f"Context updated: {len(self.files)} file(s).", title="Files")
+
     def action_edit_rules(self) -> None:
         self.app.push_screen(
             RulesScreen(self.root_dir),
@@ -180,11 +259,15 @@ class SystemPromptApp(App):
             
     def _enable_rules_button(self) -> None:
         self.query_one("#btn-rules", Button).disabled = False
-
     def action_submit(self) -> None:
         req = self.query_one("#user-request", TextArea).text
         sys_text = self.query_one("#sys-prompt", TextArea).text
-        self.exit({"request": req, "system": sys_text})
+        result = {"request": req, "system": sys_text}
+        if self.selection_changed:
+            result["files"] = list(self.files)
+            result["important"] = list(self.important)
+            result["partials"] = dict(self.partials)
+        self.exit(result)
         
     def action_cancel(self) -> None:
         self.exit(None)

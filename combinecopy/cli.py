@@ -664,6 +664,7 @@ def main():
     add_toggle("--web", help_text="Launch the local web UI server.")
     add_toggle("--web-apply", dest="web_apply", help_text="Enable web macro mode. Translates applies into simulated keyboard strokes for web IDEs.")
     add_toggle("--tfs", help_text="Use TFVC (tf.exe) instead of git for checkout and checkin operations.")
+    add_toggle("--apply-chain", dest="apply_chain", help_text="Allow chained commands in the apply CLI, e.g. 5m or ac.")
     parser.add_argument("--system", nargs='?', const='DEFAULT', default=None, help="Inject system prompt and user instructions. Optionally provide a path to a custom system prompt file.")
     parser.add_argument("--no-system", action="store_const", const=False, dest="system", help="Never inject the system prompt, overriding the saved setting.")
     parser.add_argument("--system-only", action="store_true", help="Copy only the system prompt to the clipboard and exit.")
@@ -822,7 +823,7 @@ def main():
         # accidentally enabled keyboard macro mode. It should track --web-apply,
         # matching the other AutoAgentApp construction site below.
         if getattr(args, 'apply_ui', 'tui') == 'cli':
-            result = run_apply_cli(root_dir, revert_mode=args.revert, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile)
+            result = run_apply_cli(root_dir, revert_mode=args.revert, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile, chain_mode=args.apply_chain)
         else:
             app = AutoAgentApp(root_dir, revert_mode=args.revert, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile)
             result = app.run()
@@ -994,14 +995,44 @@ def main():
                     root_dir,
                     found_files,
                     sys_prompt_text,
-                    editor_override=getattr(args, 'editor', None)
+                    editor_override=getattr(args, 'editor', None),
+                    important=important_files,
+                    partials=partial_files,
+                    max_depth=max_depth,
+                    ext_filters=ext_filters,
+                    exclude_dirs=args.exclude,
+                    ast_mode=args.file_culling
                 )
             else:
-                app = SystemPromptApp(root_dir, found_files, sys_prompt_text)
+                app = SystemPromptApp(
+                    root_dir,
+                    found_files,
+                    sys_prompt_text,
+                    important=important_files,
+                    partials=partial_files,
+                    max_depth=max_depth,
+                    ext_filters=ext_filters,
+                    exclude_dirs=args.exclude,
+                    ast_mode=args.file_culling
+                )
                 user_request_data = app.run()
             if not user_request_data:
                 console.print(Panel("System prompt setup cancelled.", title="Cancelled", style="bold yellow"))
                 return
+
+            # The request area can reopen the file selector, so whatever it
+            # hands back supersedes the selection we scanned earlier. The keys
+            # are absent unless the selector actually returned a new set.
+            if user_request_data.get("files") is not None:
+                found_files = list(user_request_data["files"])
+                important_files = list(user_request_data.get("important") or [])
+                partial_files = dict(user_request_data.get("partials") or {})
+                all_known_files = list(found_files)
+                total_files = len(found_files)
+                if total_files == 0:
+                    console.print(Panel("No files remain after reselection.", title="Result", style="bold red"))
+                    return
+                console.print(f"[cyan]\u2139[/cyan] Context updated to [bold]{total_files}[/bold] file(s) from the selector.")
         git_diff_text = ""
         if args.diff:
             if args.tfs:
@@ -1208,7 +1239,7 @@ def main():
             phase_name += " [WEB MACRO MODE]"
         console.print(f"\n[bold cyan]Phase: {phase_name}[/bold cyan]")
         if getattr(args, 'apply_ui', 'tui') == 'cli':
-            result = run_apply_cli(root_dir, all_known_files, revert_mode=args.revert, ignore_initial_clipboard=True, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile)
+            result = run_apply_cli(root_dir, all_known_files, revert_mode=args.revert, ignore_initial_clipboard=True, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile, chain_mode=args.apply_chain)
         else:
             app = AutoAgentApp(root_dir, all_known_files, revert_mode=args.revert, ignore_initial_clipboard=True, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile)
             result = app.run()

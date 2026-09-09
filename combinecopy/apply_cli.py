@@ -54,6 +54,12 @@ class _ConsoleDiffSink:
 class ApplyCliSession:
     """One apply CLI listener session."""
 
+    # Every command that is exactly one character, so a chain can be split on
+    # character boundaries once the leading digits have been consumed.
+    _SINGLE_COMMANDS = "vaAdDcmfrehlptq?"
+    # Multi-character words that must never be split into their letters.
+    _WORD_COMMANDS = ("help", "list", "quit", "exit")
+
     def __init__(
         self,
         root_dir: str,
@@ -66,6 +72,7 @@ class ApplyCliSession:
         consult_mode: bool = False,
         rehab_mode: bool = False,
         mobile_mode: bool = False,
+        chain_mode: bool = False,
     ):
         self.root_dir = root_dir
         self.known_files = known_files or []
@@ -77,6 +84,7 @@ class ApplyCliSession:
         self.consult_mode = consult_mode
         self.rehab_mode = rehab_mode
         self.mobile_mode = mobile_mode
+        self.chain_mode = chain_mode
 
         self.payload: dict | None = None
         self.selected_idx: int | None = None
@@ -713,8 +721,157 @@ class ApplyCliSession:
             return
         console.print("[yellow]No valid EXECUTION or TASK payload found on clipboard.[/yellow]")
 
+    def _parse_chain(self, raw: str) -> list[str]:
+        """Splits one input line into command tokens.
+
+        With chaining off this always returns the line untouched, so the
+        listener behaves exactly as it did before the setting existed.
+        """
+        if not self.chain_mode:
+            return [raw]
+        if raw in self._WORD_COMMANDS or raw.isdigit():
+            return [raw]
+
+        tokens: list[str] = []
+        index = 0
+        total = len(raw)
+        # Bounded: index strictly increases on every branch below.
+        while index < total:
+            char = raw[index]
+            if char.isdigit():
+                start = index
+                while index < total and raw[index].isdigit():
+                    index += 1
+                tokens.append(raw[start:index])
+                continue
+            if char not in self._SINGLE_COMMANDS:
+                # A single unrecognised character means we do not understand the
+                # line at all. Executing a prefix of it would be worse than
+                # refusing, so hand it back whole for the usual error message.
+                return [raw]
+            tokens.append(char)
+            index += 1
+        return tokens or [raw]
+
+    def _dispatch(self, cmd: str):
+        """Runs exactly one command token.
+
+        Returns None to continue, 'stop' to abort the rest of a chain, 'quit'
+        to end the session, or a dict when a commit succeeded.
+        """
+        if cmd.isdigit():
+            idx = int(cmd) - 1
+            if self.payload and 0 <= idx < len(self.payload.get("files", [])):
+                self.selected_idx = idx
+                self._print_selected_details()
+                return None
+            console.print("[red]Invalid file number.[/red]")
+            return "stop"
+
+        if cmd == "v":
+            self._render_selected_diff()
+
+        elif cmd == "a":
+            if self.selected_idx is None:
+                console.print("[yellow]No file selected. Type a file number first.[/yellow]")
+                return "stop"
+            applied = self._apply_file_idx(self.selected_idx)
+            self._print_files_table()
+            if not applied:
+                return "stop"
+
+        elif cmd == "A":
+            if not self.payload:
+                console.print("[yellow]No payload loaded.[/yellow]")
+                return "stop"
+            pending = [i for i, f in enumerate(self.payload.get("files", [])) if f.get("_status") == "pending"]
+            failed = False
+            for i in pending:
+                if not self._apply_file_idx(i):
+                    failed = True
+            self._print_files_table()
+            if failed:
+                return "stop"
+
+        elif cmd == "d":
+            if self.selected_idx is None or not self.payload:
+                console.print("[yellow]No file selected.[/yellow]")
+                return "stop"
+            self.payload["files"][self.selected_idx]["_status"] = "discarded"
+            console.print(f"[yellow]Discarded change for file #{self.selected_idx + 1}.[/yellow]")
+            self._print_files_table()
+
+        elif cmd == "D":
+            if not self.payload:
+                console.print("[yellow]No payload loaded.[/yellow]")
+                return "stop"
+            for f in self.payload.get("files", []):
+                if f.get("_status") == "pending":
+                    f["_status"] = "discarded"
+            console.print("[yellow]Discarded all pending changes.[/yellow]")
+            self._print_files_table()
+
+        elif cmd == "c":
+            res = self._handle_commit()
+            if res is None:
+                return "stop"
+            return res
+
+        elif cmd == "m":
+            self._handle_meld()
+
+        elif cmd == "f":
+            self._handle_json_fix()
+
+        elif cmd == "r":
+            self.reload_inbound()
+
+        elif cmd == "e":
+            if self.json_error_text:
+                pyperclip.copy(self.json_error_text)
+                console.print("[green]Copied JSON syntax error to clipboard.[/green]")
+            elif self.selected_idx is not None and self.payload:
+                f = self.payload["files"][self.selected_idx]
+                errs = f.get("_errors", [])
+                if errs:
+                    msg = f"ACTION FAILED VALIDATION FOR {f.get('path', 'unknown')}:\n" + "\n".join(f"- {e}" for e in errs)
+                    pyperclip.copy(msg)
+                    console.print("[green]Copied file validation error to clipboard.[/green]")
+                else:
+                    console.print("[yellow]Selected file has no errors.[/yellow]")
+            else:
+                console.print("[yellow]No error available to copy.[/yellow]")
+
+        elif cmd in ("?", "help"):
+            self._print_help()
+
+        elif cmd in ("l", "list"):
+            self._print_files_table()
+
+        elif cmd in ("q", "quit", "exit"):
+            return "quit"
+
+        # NOT IMPLEMENTED: Partial Add
+        elif cmd == "p":
+            console.print("[yellow]Partial Add (p) is only supported in the full TUI. Run without --apply-cli.[/yellow]")
+
+        elif cmd == "h":
+            self._handle_human_correct()
+
+        # NOT IMPLEMENTED: Rehab Mode practice session
+        elif cmd == "t":
+            console.print("[yellow]Active Recall practice (t) is only supported in the full TUI. Run without --apply-cli.[/yellow]")
+
+        else:
+            console.print(f"[yellow]Unknown command '{cmd}'. Type '?' for help.[/yellow]")
+            return "stop"
+
+        return None
+
     def run(self) -> dict | None:
         console.print(Rule("[bold blue]CLI Apply Listener[/bold blue]"))
+        if self.chain_mode:
+            console.print("[dim]Command chaining is on: '5m' and 'ac' work as a single entry.[/dim]")
         console.print("[dim]Checking clipboard for execution payload...[/dim]")
         self.reload_inbound()
 
@@ -728,108 +885,21 @@ class ApplyCliSession:
             if not raw:
                 continue
 
-            # Numbers select a file
-            if raw.isdigit():
-                idx = int(raw) - 1
-                if self.payload and 0 <= idx < len(self.payload.get("files", [])):
-                    self.selected_idx = idx
-                    self._print_selected_details()
-                else:
-                    console.print("[red]Invalid file number.[/red]")
-                continue
-
-            # Single-key operations (case-sensitive for A/D)
-            cmd = raw
-
-            if cmd == "v":
-                self._render_selected_diff()
-
-            elif cmd == "a":
-                if self.selected_idx is None:
-                    console.print("[yellow]No file selected. Type a file number first.[/yellow]")
-                else:
-                    self._apply_file_idx(self.selected_idx)
-                    self._print_files_table()
-
-            elif cmd == "A":
-                if not self.payload:
-                    console.print("[yellow]No payload loaded.[/yellow]")
-                else:
-                    pending = [i for i, f in enumerate(self.payload.get("files", [])) if f.get("_status") == "pending"]
-                    for i in pending:
-                        self._apply_file_idx(i)
-                    self._print_files_table()
-
-            elif cmd == "d":
-                if self.selected_idx is None or not self.payload:
-                    console.print("[yellow]No file selected.[/yellow]")
-                else:
-                    self.payload["files"][self.selected_idx]["_status"] = "discarded"
-                    console.print(f"[yellow]Discarded change for file #{self.selected_idx + 1}.[/yellow]")
-                    self._print_files_table()
-
-            elif cmd == "D":
-                if not self.payload:
-                    console.print("[yellow]No payload loaded.[/yellow]")
-                else:
-                    for f in self.payload.get("files", []):
-                        if f.get("_status") == "pending":
-                            f["_status"] = "discarded"
-                    console.print("[yellow]Discarded all pending changes.[/yellow]")
-                    self._print_files_table()
-
-            elif cmd == "c":
-                res = self._handle_commit()
-                if res is not None:
-                    return res
-
-            elif cmd == "m":
-                self._handle_meld()
-
-            elif cmd == "f":
-                self._handle_json_fix()
-
-            elif cmd == "r":
-                self.reload_inbound()
-
-            elif cmd == "e":
-                if self.json_error_text:
-                    pyperclip.copy(self.json_error_text)
-                    console.print("[green]Copied JSON syntax error to clipboard.[/green]")
-                elif self.selected_idx is not None and self.payload:
-                    f = self.payload["files"][self.selected_idx]
-                    errs = f.get("_errors", [])
-                    if errs:
-                        msg = f"ACTION FAILED VALIDATION FOR {f.get('path', 'unknown')}:\n" + "\n".join(f"- {e}" for e in errs)
-                        pyperclip.copy(msg)
-                        console.print("[green]Copied file validation error to clipboard.[/green]")
-                    else:
-                        console.print("[yellow]Selected file has no errors.[/yellow]")
-                else:
-                    console.print("[yellow]No error available to copy.[/yellow]")
-
-            elif cmd in ("?", "help"):
-                self._print_help()
-
-            elif cmd in ("l", "list"):
-                self._print_files_table()
-
-            elif cmd in ("q", "quit", "exit"):
-                return self._summary_result(None)
-
-            # NOT IMPLEMENTED: Partial Add
-            elif cmd == "p":
-                console.print("[yellow]Partial Add (p) is only supported in the full TUI. Run without --apply-cli.[/yellow]")
-
-            elif cmd == "h":
-                self._handle_human_correct()
-
-            # NOT IMPLEMENTED: Rehab Mode practice session
-            elif cmd == "t":
-                console.print("[yellow]Active Recall practice (t) is only supported in the full TUI. Run without --apply-cli.[/yellow]")
-
-            else:
-                console.print(f"[yellow]Unknown command '{cmd}'. Type '?' for help.[/yellow]")
+            tokens = self._parse_chain(raw)
+            for position, token in enumerate(tokens):
+                outcome = self._dispatch(token)
+                if outcome == "quit":
+                    return self._summary_result(None)
+                if isinstance(outcome, dict):
+                    return outcome
+                if outcome == "stop":
+                    remaining = len(tokens) - position - 1
+                    if remaining > 0:
+                        console.print(
+                            f"[yellow]Chain stopped at step {position + 1} ('{token}'); "
+                            f"{remaining} remaining step(s) skipped.[/yellow]"
+                        )
+                    break
 
     def _summary_result(self, commit_hash: str | None) -> dict | None:
         """Always returns a session summary dictionary upon quitting or finishing."""
@@ -859,6 +929,14 @@ class ApplyCliSession:
         console.print("  [cyan]e[/cyan]            Copy validation or JSON error to clipboard")
         console.print("  [cyan]l[/cyan]            Reprint the file status table")
         console.print("  [cyan]q[/cyan]            Quit session and show summary")
+        if self.chain_mode:
+            console.print(Rule("[bold blue]Chaining[/bold blue]"))
+            console.print("  Chaining is [green]on[/green], so several commands can share one line.")
+            console.print("  [cyan]5m[/cyan]           Select file 5, then open it in Meld")
+            console.print("  [cyan]ac[/cyan]           Apply the selected file, then commit")
+            console.print("  [cyan]3ac[/cyan]          Select file 3, apply it, then commit")
+            console.print("  [dim]A chain stops at the first step that fails.[/dim]")
+            console.print("  [dim]An unrecognised character rejects the whole line.[/dim]")
 
 
 def run_apply_cli(
@@ -872,6 +950,7 @@ def run_apply_cli(
     consult_mode: bool = False,
     rehab_mode: bool = False,
     mobile_mode: bool = False,
+    chain_mode: bool = False,
 ) -> dict | None:
     """Runs the CLI apply listener session."""
     session = ApplyCliSession(
@@ -885,5 +964,6 @@ def run_apply_cli(
         consult_mode=consult_mode,
         rehab_mode=rehab_mode,
         mobile_mode=mobile_mode,
+        chain_mode=chain_mode,
     )
     return session.run()

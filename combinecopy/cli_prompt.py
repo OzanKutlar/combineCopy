@@ -37,7 +37,13 @@ HISTORY_PATH = os.path.expanduser('~/.configs/combineCopy/prompt_history')
 _ACT_EDITOR = '::cc-editor::'
 _ACT_RULES = '::cc-rules::'
 _ACT_SEND = '::cc-send::'
-_KEY_ACTIONS = {_ACT_EDITOR: 'editor', _ACT_RULES: 'rules', _ACT_SEND: 'send'}
+_ACT_FILES = '::cc-files::'
+_KEY_ACTIONS = {
+    _ACT_EDITOR: 'editor',
+    _ACT_RULES: 'rules',
+    _ACT_SEND: 'send',
+    _ACT_FILES: 'reselect',
+}
 
 _COMMANDS = {
     'notepad': 'notepad',
@@ -48,7 +54,9 @@ _COMMANDS = {
     'system': 'system',
     'send': 'send',
     'submit': 'send',
-    'files': 'files',
+    'files': 'reselect',
+    'ls': 'files',
+    'listfiles': 'files',
     'show': 'show',
     'clear': 'clear',
     'help': 'help',
@@ -63,7 +71,8 @@ _HELP_ROWS = [
     ('/rules    (F3)', 'Browse, edit and save rule sets'),
     ('/system', 'Edit the system prompt for this run'),
     ('/send     (Alt+Enter)', 'Finish and continue'),
-    ('/files', 'List the files currently in context'),
+    ('/files    (F4)', 'Reopen the file selector to change the context'),
+    ('/ls, /listfiles', 'List the files currently in context'),
     ('/show', 'Reprint the request buffer'),
     ('/clear', 'Empty the request buffer'),
     ('/help', 'Show this list'),
@@ -80,11 +89,22 @@ def _split_lines(text):
 class CliPromptSession:
     """One request-entry session. Owns the buffer and the system prompt text."""
 
-    def __init__(self, root_dir, files, sys_prompt, editor_override=None):
+    def __init__(self, root_dir, files, sys_prompt, editor_override=None,
+                 important=None, partials=None, max_depth=100,
+                 ext_filters=None, exclude_dirs=None, ast_mode=False):
         self.root_dir = root_dir
         self.files = list(files or [])
+        self.important = list(important) if important is not None else list(self.files)
+        self.partials = dict(partials) if partials else {}
         self.sys_prompt = sys_prompt or ''
         self.editor_override = editor_override
+        self.max_depth = max_depth if max_depth is not None else 100
+        self.ext_filters = ext_filters
+        self.exclude_dirs = exclude_dirs
+        self.ast_mode = bool(ast_mode)
+        # Only reported back when the selector actually returned something, so
+        # a run that never touches /files behaves exactly as it did before.
+        self.selection_changed = False
         self.lines = []
         self.session = self._build_session()
 
@@ -109,6 +129,10 @@ class CliPromptSession:
         @bindings.add('f3')
         def _to_rules(event):
             event.app.exit(result=(_ACT_RULES, _get_buffer_text(event)))
+
+        @bindings.add('f4')
+        def _to_files(event):
+            event.app.exit(result=(_ACT_FILES, _get_buffer_text(event)))
 
         @bindings.add('escape', 'enter')
         def _alt_enter(event):
@@ -210,6 +234,49 @@ class CliPromptSession:
             return
         self.sys_prompt = edited
         console.print('[green]System prompt updated for this run.[/green]')
+
+    def _action_reselect(self):
+        """Reopens the file selector so the context can be changed mid-request."""
+        from combinecopy.tui.selection import run_file_selector
+        from combinecopy.utils import get_files_recursive
+
+        with console.status('[bold green]Rescanning workspace...[/bold green]', spinner='dots'):
+            scanned = get_files_recursive(
+                self.root_dir, 0, self.max_depth, self.ext_filters,
+                exclude_dirs=self.exclude_dirs
+            )
+
+        # A file targeted directly on the command line may sit outside the
+        # scan filters. Offering only the scan would silently drop it.
+        for path in self.files:
+            if path not in scanned:
+                scanned.append(path)
+
+        if not scanned:
+            console.print('[yellow]The scan found no files to select from.[/yellow]')
+            return
+
+        try:
+            selected = run_file_selector(
+                self.root_dir,
+                scanned,
+                ast_mode=self.ast_mode,
+                preselected_files=list(self.files),
+                preselected_partials=dict(self.partials)
+            )
+        except Exception as error:
+            console.print(f'[red]File selector failed: {error}[/red]')
+            return
+
+        if selected is None:
+            console.print('[yellow]Selection cancelled; the context is unchanged.[/yellow]')
+            return
+
+        self.files = list(selected[0])
+        self.important = list(selected[1] or [])
+        self.partials = dict(selected[2] or {})
+        self.selection_changed = True
+        console.print(f'[green]Context updated: {len(self.files)} file(s) selected.[/green]')
 
     def _action_files(self):
         if not self.files:
@@ -328,7 +395,7 @@ class CliPromptSession:
     def _print_banner(self):
         console.print(Rule('[bold blue]Request Area[/bold blue]'))
         console.print(f'[dim]{len(self.files)} file(s) in context. Type your request, then /send (or Alt+Enter).[/dim]')
-        console.print('[dim]/editor (F2) default editor  |  /notepad  |  /micro  |  /rules (F3)  |  /help[/dim]')
+        console.print('[dim]/editor (F2)  |  /rules (F3)  |  /files (F4) reselect  |  /ls list  |  /help[/dim]')
         if not PROMPT_TOOLKIT_AVAILABLE or self.session is None:
             console.print('[dim yellow]prompt_toolkit is unavailable, so F2/F3/Alt+Enter are off. Slash commands still work.[/dim yellow]')
 
@@ -338,7 +405,12 @@ class CliPromptSession:
             answer = console.input('[bold yellow]The request is empty. Submit anyway? (y/N): [/bold yellow]').strip().lower()
             if answer not in ('y', 'yes'):
                 return None
-        return {'request': request, 'system': self.sys_prompt}
+        result = {'request': request, 'system': self.sys_prompt}
+        if self.selection_changed:
+            result['files'] = list(self.files)
+            result['important'] = list(self.important)
+            result['partials'] = dict(self.partials)
+        return result
 
     def run(self):
         self._print_banner()
@@ -396,6 +468,20 @@ class CliPromptSession:
                 self.lines.append(text)
 
 
-def run_cli_prompt(root_dir, files, sys_prompt, editor_override=None):
+def run_cli_prompt(root_dir, files, sys_prompt, editor_override=None,
+                   important=None, partials=None, max_depth=100,
+                   ext_filters=None, exclude_dirs=None, ast_mode=False):
     """Collects a request through the CLI area. Returns None when cancelled."""
-    return CliPromptSession(root_dir, files, sys_prompt, editor_override).run()
+    session = CliPromptSession(
+        root_dir,
+        files,
+        sys_prompt,
+        editor_override,
+        important=important,
+        partials=partials,
+        max_depth=max_depth,
+        ext_filters=ext_filters,
+        exclude_dirs=exclude_dirs,
+        ast_mode=ast_mode
+    )
+    return session.run()

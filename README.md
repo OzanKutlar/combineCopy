@@ -49,9 +49,10 @@ combineCopy -f html md
 To use the agentic abilities, the main CLI argument is `--system`. When you pass `--system`, the tool brings up a TUI where you can write your specific instruction, such as *"edit this readme"*.
 
 ![The system prompt TUI with edit this readme as the instruction](docs/images/03-system-tui.png)
-
 > [!NOTE]
 > You can swap this TUI for a plain CLI interface by running `combineCopy --settings` and changing `prompt_ui` from `tui` to `cli`.
+
+If you realise the wrong files are in context once you are already writing the request, you do not have to start over. Press **F4**, or use the **Reselect Files** button above the file list, to reopen the selector. In the CLI request area the same job is done by `/files`. Whatever you pick replaces the context for this run; cancelling out leaves it alone.
 
 After you send the request in, the tool automatically copies all of your selected files and your request, along with the system prompt, into your clipboard.
 
@@ -136,6 +137,7 @@ The `off` word is only consumed when it appears on its own immediately after the
 | `--system` | Launch a TUI to inject system prompts and user instructions. Accepts an optional path to a custom text file. | none | none |
 | `--prompt-cli`, `--prompt-tui` | Choose terminal input or Textual TUI for the system prompt request area. | tui | none |
 | `--apply-cli`, `--apply-tui` | Choose terminal interface or Textual TUI for the apply listener. | tui | none |
+| `--apply-chain` | Allow several apply-listener commands on one line, e.g. `5m` or `ac`. | false | none |
 | `--web` | Launch the local Flask-based Web UI server on `127.0.0.1:5000`. | false | none |
 
 ### Agent & Execution Modes
@@ -295,6 +297,7 @@ When any setting differs from its built-in default, a dim one-line banner names 
 | `xml` | on/off | off | Ask the AI for XML payloads instead of JSON |
 | `prompt_ui` | `cli` / `tui` | `tui` | How the request area is presented |
 | `apply_ui` | `cli` / `tui` | `tui` | How the apply listener is presented |
+| `apply_chain` | on/off | off | Allow chained apply commands like `5m` or `ac` |
 | `tfs` | on/off | off | Use TFVC instead of git |
 | `cli` | on/off | off | Let the AI emit terminal commands |
 | `consult` | on/off | off | Enable the external Expert LLM phase |
@@ -341,9 +344,27 @@ On launch, the CLI apply listener automatically reads the execution payload curr
 | `e` | Copy validation or JSON syntax error to clipboard |
 | `l` | Reprint the pending files table || `?`, `help` | Show command help |
 | `q` | Quit the apply session (always returns summary) |
-
 > [!NOTE]
 > Advanced modal features like Partial Add (`p`), Human Correct (`h`), and Active Learning practice (`t`) are exclusive to the full TUI.
+
+### Command Chaining
+
+By default each line is a single command, so selecting file 5 and opening it in Meld means `5`, Enter, `m`, Enter. Turn `apply_chain` on in the settings editor, or pass `--apply-chain`, and several commands can share one line:
+
+```
+apply> 5m      # select file 5, then open it in Meld
+apply> ac      # apply the selected file, then commit
+apply> 3ac     # select file 3, apply it, then commit
+```
+
+A leading run of digits is read as one file number; every character after that is its own command. Spaces are not allowed inside a chain.
+
+Two rules keep this from doing something you did not ask for:
+
+- **A chain stops at the first step that fails.** If the apply in `ac` hits a validation error, the commit never runs, and you are told which step stopped it and how many were skipped.
+- **One unrecognised character rejects the whole line.** `5x` does not select file 5 and then complain; it prints the usual `Unknown command` message and changes nothing.
+
+With chaining off, every line behaves exactly as it always has, including lines that would otherwise parse as a chain.
 
 ---
 
@@ -361,7 +382,8 @@ Type your request across as many lines as you like. Lines beginning with `/` are
 | `/rules` | F3 | Browse the rule catalog, edit one, save to `.ccrules` and/or `default_rules.json` |
 | `/system` | none | Edit the system prompt for this run only |
 | `/send`, `/submit` | Alt+Enter | Finish and continue |
-| `/files` | none | List the files currently in context |
+| `/files` | F4 | Reopen the file selector to change which files are sent |
+| `/ls`, `/listfiles` | none | List the files currently in context |
 | `/show` | none | Reprint the buffer with line numbers |
 | `/clear` | none | Empty the buffer |
 | `/help` | none | Command list |
