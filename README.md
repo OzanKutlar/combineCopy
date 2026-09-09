@@ -7,10 +7,7 @@ It also allows for full agentic workloads without the use of an API, using chat 
 This tool was originally created as a means for me to give large file contexts to LLMs so that they could find a bug, which I would then fix manually.
 
 However, through upgrading and refining it, I have given the tool the ability to edit files, divide tasks between sub-agents, and request more files than its context provides.
-
 How to install the tool can be found under [Installation](#installation), and a full walkthrough of the agentic loop can be found under [Example Agentic Usecase](#example-agentic-usecase).
-
-For complete scenario walkthroughs, each taking one realistic situation from the first command to the final commit, see the [Use Case Walkthroughs](docs/usecases/README.md).
 
 ## Installation
 
@@ -30,7 +27,7 @@ pip install -e .[desktop]
 
 This extra is deliberately optional because `keyboard` requires root on Linux and cannot build on Android at all. Leaving it out keeps the base install working on Termux.
 
-Once installed, you can use the `combineCopy`, `ftpapp`, and `webapp` commands. You also get the `app` shortcut, which automatically runs `combineCopy --apply`.
+Once installed, you can use the `combineCopy` command. You also get the `app` shortcut, which automatically runs `combineCopy --apply`.
 
 ## Example Agentic Usecase
 
@@ -75,8 +72,9 @@ Finally, when you feel that the plan the LLM proposed is sufficient, you give it
 The LLM will then output a very long and rather scary looking JSON payload.
 
 ![The execution payload in the chat](docs/images/08-execution-payload.png)
-
 Simply copy the entire message using the copy button at the bottom of the response.
+
+![The copy button at the bottom of the response](docs/images/085-copy-clipboard.png)
 
 > [!WARNING]
 > Make sure to copy as Markdown if any other option is available.
@@ -102,7 +100,7 @@ Below is the full list of arguments.
 
 ## Command-Line Arguments
 
-Every boolean flag below accepts an explicit off switch, so a default saved in your settings file can be overridden in either direction for a single run:
+Most boolean flags below accept an explicit off switch, so a default saved in your settings file can be overridden in either direction for a single run:
 
 ```bash
 combineCopy --xml off      # equivalently: --xml=off, or --no-xml
@@ -110,6 +108,9 @@ combineCopy --tfs on -f cs # explicitly on, even if the setting says otherwise
 ```
 
 The `off` word is only consumed when it appears on its own immediately after the flag, so `combineCopy --xml src/main.py` still treats the path as a path.
+
+> [!NOTE]
+> The one-shot flags `--system-only`, `--mobile-doctor`, `--install-url-opener` and `--force` have no paired off switch, since they have no saved default to override.
 
 ### Path Targets
 
@@ -135,6 +136,7 @@ The `off` word is only consumed when it appears on its own immediately after the
 | :--- | :--- | :--- | :--- |
 | `--select` | Launch the interactive TUI selector to manually filter the context payload. | false | -s |
 | `--system` | Launch a TUI to inject system prompts and user instructions. Accepts an optional path to a custom text file. | none | none |
+| `--no-system` | Never inject the system prompt, overriding the saved setting. | false | none |
 | `--prompt-cli`, `--prompt-tui` | Choose terminal input or Textual TUI for the system prompt request area. | tui | none |
 | `--apply-cli`, `--apply-tui` | Choose terminal interface or Textual TUI for the apply listener. | tui | none |
 | `--apply-chain` | Allow several apply-listener commands on one line, e.g. `5m` or `ac`. | false | none |
@@ -146,6 +148,7 @@ The `off` word is only consumed when it appears on its own immediately after the
 | :--- | :--- | :--- | :--- |
 | `--apply` | Run the apply listener, monitoring the clipboard for execution payloads. | false | -a, --auto |
 | `--rehab` | Enable Active Learning mode. Forces the AI to emit plain-English instructions and hints, hiding the code until you practice writing it yourself. | false | none |
+| `--divide` | Enable Large Task Mode. Splits a sweeping request into sub-tasks tracked in `.cc_tasks.json`. | false | none |
 | `--revert` | Run the apply listener, but reverse all incoming modifications. | false | -r |
 | `--cli` | Enable CLI Mode, allowing the LLM to output terminal commands in its payload. | false | none |
 | `--consult` | Enable the consultation phase, permitting the AI to query external Expert LLMs. | false | none |
@@ -195,7 +198,7 @@ Two interactive guards keep a sloppy query from swallowing the workspace. If a s
 
 | Option | Description | Default | Alias |
 | :--- | :--- | :--- | :--- |
-| `--file` | Save the generated prompt to a temporary `.txt` file and copy the file object to the clipboard. | false | none |
+| `--file` | Save the generated prompt to a temporary `.txt` file and copy the file object to the clipboard. Windows only; elsewhere it falls back to plain text. | false | none |
 | `--system-only` | Copy the raw system prompt text to the clipboard and exit. | false | none |
 
 ### Common Usage Examples
@@ -236,17 +239,16 @@ It scans your workspace, filters extensions, and drops excluded directories. It 
 Many web-based AI platforms treat uploaded documents as compressed knowledgebases and cannot process the entirety of a document at once. `combineCopy` bypasses this by posting complete files straight into the chat box, so the LLM sees every file and keeps them fully in context.
 
 To keep your token counts low, it uses file culling. It builds an Abstract Syntax Tree (AST) map of your project, so the AI gets the blueprint of your codebase without having to read every single line of code.
-
-> [!TIP]
-> You can review any pending changes visually in Meld with **m**, edit the proposed replacement directly in the right-hand pane, and save before applying.
-
 ### Automated Execution
 
 Manual copy-pasting is slow and prone to errors. The execution agent fixes this.
 
 Instead of letting the AI output the entire file, which eats up precious output tokens and slows down generation, we make the AI emit targeted search-and-replace modifications. This allows the LLM to efficiently fix problems on its own.
 
-It monitors your clipboard in the background. When it catches a valid JSON or XML instruction payload, it goes to work. It creates files, modifies code using targeted search-and-replace, and executes CLI commands. You see the diffs on your screen before anything becomes permanent.
+It monitors your clipboard in the background. When it catches a valid JSON or XML instruction payload, it goes to work. It creates files and modifies code using targeted search-and-replace. With `--cli` it can also execute terminal commands, which the default schema forbids outright. You see the diffs on your screen before anything becomes permanent.
+
+> [!TIP]
+> You can review any pending changes visually in Meld with **m**, edit the proposed replacement directly in the right-hand pane, and save before applying.
 
 ### Rehab Mode (Active Learning)
 
@@ -282,10 +284,9 @@ The editor is a numbered menu. Booleans toggle when you select them, `mobile` cy
 ### Precedence
 
 From weakest to strongest:
-
 1. Built-in defaults
-2. `settings.json`
-3. Environment detection (Termux implies mobile mode, but only when `mobile` is left on `auto`)
+2. Environment detection (Termux implies mobile mode, but only when `mobile` is left on `auto`)
+3. `settings.json`
 4. An explicit flag on the command line
 
 When any setting differs from its built-in default, a dim one-line banner names the ones in play, so a surprising run always explains itself.
@@ -342,10 +343,12 @@ On launch, the CLI apply listener automatically reads the execution payload curr
 | `c` | Commit applied files to VCS (Git or TFS) and exit |
 | `r` | Reload payload from clipboard (or inbox on Termux) |
 | `e` | Copy validation or JSON syntax error to clipboard |
-| `l` | Reprint the pending files table || `?`, `help` | Show command help |
+| `l` | Reprint the pending files table |
+| `?`, `help` | Show command help |
 | `q` | Quit the apply session (always returns summary) |
+
 > [!NOTE]
-> Advanced modal features like Partial Add (`p`), Human Correct (`h`), and Active Learning practice (`t`) are exclusive to the full TUI.
+> Advanced modal features like Partial Add (`p`) and Active Learning practice (`t`) are exclusive to the full TUI. Human Correct (`h`) works in both, through an interactive hunk adjuster in the CLI.
 
 ### Command Chaining
 
@@ -357,7 +360,7 @@ apply> ac      # apply the selected file, then commit
 apply> 3ac     # select file 3, apply it, then commit
 ```
 
-A leading run of digits is read as one file number; every character after that is its own command. Spaces are not allowed inside a chain.
+A run of digits is read as a single file number wherever it appears; every other character is its own command. Spaces are not allowed inside a chain.
 
 Two rules keep this from doing something you did not ask for:
 
@@ -468,12 +471,3 @@ Clipboard writes work normally, so generated prompts land on the Android clipboa
 | `pip install -e .` fails on `keyboard` | Expected on Termux | Already excluded from base deps; make sure you are not passing `[desktop]` |
 | Screen garbled after leaving the editor | Editor did not restore the terminal | Press `Ctrl+L`, or use a different editor |
 | `Meld not found` | Meld has no Android build | Expected — the inline diff view replaces it |
-
----
-
-## Supplementary Deployment Utilities
-
-Sometimes you have to deploy code without Git. These secondary tools handle restrictive environments.
-
-*   **`ftpapp`**: Syncs your workspace to FTP servers. It reads your Git history, finds exactly what changed since your last commit, and transfers only those files. It runs in the background so your terminal stays responsive.
-*   **`webapp`**: Built for browser-based IDEs where direct uploads fail. It reads your Git diffs, hooks into your OS keyboard, and physically macros the file updates into the browser for you.
