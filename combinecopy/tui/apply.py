@@ -2237,7 +2237,9 @@ class AutoAgentApp(App):
         else:
             self._commit_git(msg, paths_to_stage)
     def _commit_git(self, msg: str, paths_to_stage: list[str]) -> None:
-        commit_hash, error = commit_git(self.root_dir, msg, paths_to_stage)
+        commit_hash, warnings, error = commit_git(self.root_dir, msg, paths_to_stage)
+        if warnings:
+            self.notify(f"Git staging warnings: {'; '.join(warnings)}", severity="warning")
         if error:
             self.notify(error, title="Error", severity="error")
         else:

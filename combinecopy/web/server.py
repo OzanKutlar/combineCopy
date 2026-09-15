@@ -11,6 +11,7 @@ from combinecopy.utils import (
     generate_tree_string, console, print_auto_summary, compute_new_text
 )
 from combinecopy.prompts import build_prompt
+from combinecopy.apply_core import commit_git
 
 app = Flask(__name__)
 
@@ -262,13 +263,13 @@ def commit_changes():
     commit_hash = None
     
     try:
+        warnings = []
         if paths_to_stage:
-            subprocess.run(["git", "add"] + paths_to_stage, cwd=ROOT_DIR, check=True)
-            subprocess.run(["git", "commit", "-m", msg], cwd=ROOT_DIR, check=True)
-            try:
-                commit_hash = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT_DIR, text=True).strip()
-            except Exception:
-                pass
+            commit_hash, warnings, git_error = commit_git(ROOT_DIR, msg, paths_to_stage)
+            for w in warnings:
+                console.print(f"[yellow]Git warning: {w}[/yellow]")
+            if git_error:
+                return jsonify({"error": git_error, "warnings": warnings}), 500
                 
         result = {
             "commit_message": msg,
@@ -284,8 +285,7 @@ def commit_changes():
             os._exit(0)
             
         threading.Thread(target=shutdown, daemon=True).start()
-        
-        return jsonify({"success": True})
+        return jsonify({"success": True, "warnings": warnings})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

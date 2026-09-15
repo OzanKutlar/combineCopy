@@ -176,19 +176,119 @@ def validate_file_obj(file_obj: dict, root_dir: str, known_files: list[str] | No
     file_obj["_errors"] = errors
 
 
-def commit_git(root_dir: str, msg: str, paths_to_stage: list[str]) -> tuple[str | None, str | None]:
-    """Stages and commits files via Git. Returns (commit_hash, error_msg)."""
+def _run_git(args: list[str], root_dir: str) -> tuple[int, str, str]:
+    """Runs one git command, returning (returncode, stdout, stderr).
+
+    Never raises. A missing git binary or a timeout is reported as exit 128,
+    which is what git itself uses for a fatal error, so callers only need one
+    failure path.
+    """
     try:
-        subprocess.run(["git", "add"] + paths_to_stage, cwd=root_dir, check=True)
-        subprocess.run(["git", "commit", "-m", msg], cwd=root_dir, check=True)
-        commit_hash = ""
-        try:
-            commit_hash = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root_dir, text=True).strip()
-        except Exception:
-            pass
-        return commit_hash, None
-    except subprocess.CalledProcessError as e:
-        return None, f"Git error: {e}"
+        result = subprocess.run(
+            ["git"] + args,
+            cwd=root_dir,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=120,
+        )
+        return result.returncode, result.stdout or "", result.stderr or ""
+    except Exception as e:
+        return 128, "", str(e)
+
+
+def _normalize_rel(path: str) -> str:
+    """Payload paths may use either separator; git always reports forward slashes."""
+    return path.replace("\\", "/").strip()
+
+
+def _git_tracked(root_dir: str, paths: list[str]) -> set[str]:
+    """Returns the subset of paths git already holds in its index.
+
+    This queries the index rather than the working tree, so it answers
+    correctly for a file that has just been deleted from disk.
+    """
+    if not paths:
+        return set()
+    code, out, _ = _run_git(["ls-files", "-z", "--"] + paths, root_dir)
+    if code != 0:
+        return set()
+    return {_normalize_rel(p) for p in out.split("\u0000") if p.strip()}
+
+
+def _git_ignored(root_dir: str, paths: list[str]) -> set[str]:
+    """Returns the subset of paths matched by an ignore rule.
+
+    check-ignore exits 1 when nothing matches, which is a normal answer and
+    not a failure. Only a fatal exit means the result is unusable.
+    """
+    if not paths:
+        return set()
+    code, out, _ = _run_git(["check-ignore", "-z", "--"] + paths, root_dir)
+    if code not in (0, 1):
+        return set()
+    return {_normalize_rel(p) for p in out.split("\u0000") if p.strip()}
+
+
+def classify_paths_for_staging(root_dir: str, paths: list[str]) -> tuple[list[str], list[tuple[str, str]]]:
+    """Splits paths into (stageable, skipped), where skipped is [(path, reason)].
+
+    A path git cannot possibly accept would abort the whole `git add`, so it is
+    identified here and dropped rather than allowed to fail the commit.
+    """
+    stageable: list[str] = []
+    skipped: list[tuple[str, str]] = []
+    if not paths:
+        return stageable, skipped
+
+    tracked = _git_tracked(root_dir, paths)
+    ignored = _git_ignored(root_dir, paths)
+
+    for path in paths:
+        key = _normalize_rel(path)
+        exists = os.path.exists(os.path.join(root_dir, path))
+        is_tracked = key in tracked
+        is_ignored = key in ignored
+
+        if exists:
+            # Tracking beats an ignore rule: a file already in the index stays
+            # stageable even if a newly written .gitignore now covers it.
+            if is_ignored and not is_tracked:
+                skipped.append((path, "ignored by .gitignore and never tracked"))
+            else:
+                stageable.append(path)
+        elif is_tracked:
+            # Gone from disk but present in the index: this is the deletion.
+            stageable.append(path)
+        else:
+            skipped.append((path, "never tracked, so there is no deletion to stage"))
+
+    return stageable, skipped
+
+
+def commit_git(root_dir: str, msg: str, paths_to_stage: list[str]) -> tuple[str | None, list[str], str | None]:
+    """Stages and commits files via Git. Returns (commit_hash, warnings, error_msg)."""
+    stageable, skipped = classify_paths_for_staging(root_dir, paths_to_stage)
+    warnings = [f"Skipped '{path}': {reason}." for path, reason in skipped]
+
+    if not stageable:
+        return None, warnings, "Git error: none of the applied paths could be staged."
+
+    # -A stages deletions of tracked files; -- stops a leading-dash path from
+    # being read as a flag.
+    code, out, err = _run_git(["add", "-A", "--"] + stageable, root_dir)
+    if code != 0:
+        return None, warnings, f"Git error: git add failed: {(err or out).strip()}"
+
+    code, out, err = _run_git(["commit", "-m", msg], root_dir)
+    if code != 0:
+        return None, warnings, f"Git error: git commit failed: {(err or out).strip()}"
+
+    commit_hash = ""
+    code, out, _ = _run_git(["rev-parse", "HEAD"], root_dir)
+    if code == 0:
+        commit_hash = out.strip()
+    return commit_hash, warnings, None
 
 
 def commit_tfs(root_dir: str, msg: str, applied_files: list[dict], paths_to_stage: list[str]) -> tuple[str | None, list[str], str | None]:

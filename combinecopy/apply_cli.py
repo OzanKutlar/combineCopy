@@ -688,7 +688,9 @@ class ApplyCliSession:
             commit_hash = f"CS{changeset}" if changeset else None
             console.print(f"[bold green]Changes checked into TFS as changeset #{changeset}![/bold green]")
         else:
-            commit_hash, error = commit_git(self.root_dir, msg, paths)
+            commit_hash, warnings, error = commit_git(self.root_dir, msg, paths)
+            for w in warnings:
+                console.print(f"[yellow]Git warning: {w}[/yellow]")
             if error:
                 console.print(f"[bold red]{error}[/bold red]")
                 return None
