@@ -419,6 +419,33 @@ def detect_newline(path: str) -> str:
     except Exception:
         return ""
 
+
+def detect_text_newline(text: str) -> str:
+    """Returns the dominant line ending of an in-memory string.
+
+    Mirrors detect_newline() so on-disk and in-memory checks agree: CRLF wins
+    if present, then LF, then a bare CR. Text with no line break reports LF.
+    """
+    if not isinstance(text, str) or not text:
+        return "\n"
+    if "\r\n" in text:
+        return "\r\n"
+    if "\n" in text:
+        return "\n"
+    if "\r" in text:
+        return "\r"
+    return "\n"
+
+
+def normalize_newlines(text: str, newline: str = "\n") -> str:
+    """Converts every line ending in text to a single style."""
+    if newline not in ("\n", "\r\n", "\r"):
+        raise ValueError(f"Unsupported newline style: {newline!r}")
+    if not isinstance(text, str) or not text:
+        return text
+    unified = text.replace("\r\n", "\n").replace("\r", "\n")
+    return unified if newline == "\n" else unified.replace("\n", newline)
+
 def extract_xml_from_text(text: str) -> list[str]:
     """Extracts XML antigravity payloads from text."""
     results = []
@@ -843,14 +870,33 @@ def apply_diff_patch(original_text: str, search_text: str, replace_text: str) ->
     prefix = source_lines[:start_idx]
     suffix = source_lines[end_idx+1:]
     return "".join(prefix + patched_window + suffix)
+def _restore_newlines(text: str, old_text: str, target_newline: str) -> str:
+    """Puts text back into the file's own line-ending style.
+
+    New or empty files have no style to preserve, so their text is returned
+    exactly as the payload gave it.
+    """
+    if not old_text or not isinstance(text, str):
+        return text
+    return normalize_newlines(text, target_newline)
+
 
 def compute_new_text(file_obj: dict, old_text: str) -> str:
+    """Applies a payload's edits to old_text and returns the resulting text.
+
+    Payload strings always use LF, so every match runs on an LF working copy.
+    The result is converted back to the file's own line ending, which is what
+    write_text_preserving writes to disk. A diff of old_text against this
+    result therefore shows only real changes, the same as Meld does.
+    """
+    old_text = old_text or ""
+    target_newline = detect_text_newline(old_text)
     if "content" in file_obj:
-        return file_obj["content"]
-    new_text = old_text
+        return _restore_newlines(file_obj["content"], old_text, target_newline)
+    new_text = normalize_newlines(old_text, "\n")
     for block in file_obj.get("search_replace", []):
-        search = block.get("search", "")
-        replace = block.get("replace", "")
+        search = normalize_newlines(block.get("search", "") or "", "\n")
+        replace = normalize_newlines(block.get("replace", "") or "", "\n")
         if search and search in new_text:
             new_text = new_text.replace(search, replace, 1)
         else:
@@ -883,12 +929,15 @@ def compute_new_text(file_obj: dict, old_text: str) -> str:
                 new_text = re.sub(pattern, replacement, new_text)
             except re.error:
                 pass
-    return new_text
-
+    return _restore_newlines(new_text, old_text, target_newline)
 def render_word_diff(old_text: str, new_text: str, diff_view) -> None:
-    """Calculates word-level diffs and outputs them to the rich RichLog container."""
-    old_lines = old_text.splitlines(keepends=True)
-    new_lines = new_text.splitlines(keepends=True)
+    """Calculates word-level diffs and outputs them to the rich RichLog container.
+
+    Line endings are unified for display only. A CRLF line and an LF line with
+    the same content are the same line to a reader, and to Meld.
+    """
+    old_lines = normalize_newlines(old_text or "", "\n").splitlines(keepends=True)
+    new_lines = normalize_newlines(new_text or "", "\n").splitlines(keepends=True)
     
     matcher = difflib.SequenceMatcher(None, old_lines, new_lines)
     

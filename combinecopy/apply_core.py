@@ -2,7 +2,7 @@ import os
 import re
 import difflib
 import subprocess
-from combinecopy.utils import safe_read_file, detect_newline
+from combinecopy.utils import safe_read_file, detect_newline, normalize_newlines
 from combinecopy.vcs_tfs import tfs_checkout, tfs_add, tfs_delete, tfs_checkin
 
 
@@ -127,6 +127,10 @@ def validate_file_obj(file_obj: dict, root_dir: str, known_files: list[str] | No
                 if status_callback:
                     status_callback(f"Reading {path}...")
                 old_text = safe_read_file(full_path)
+                # Payload text always uses bare LF, so compare against an LF copy
+                # of the file. Otherwise every multi-line block in a CRLF file
+                # would be misreported as a fuzzy match.
+                lf_old_text = normalize_newlines(old_text, "\n")
                 for b_idx, block in enumerate(file_obj.get("search_replace", [])):
                     if status_callback:
                         status_callback(f"Checking match {b_idx + 1}/{len(file_obj.get('search_replace', []))} in {path}...")
@@ -134,13 +138,14 @@ def validate_file_obj(file_obj: dict, root_dir: str, known_files: list[str] | No
                     if "replace" not in block:
                         errors.append(f"No replacement found for search block {b_idx + 1}.")
                     search_text = block.get("search", "")
-                    if search_text and search_text not in old_text:
+                    lf_search_text = normalize_newlines(search_text, "\n") if isinstance(search_text, str) else ""
+                    if lf_search_text and lf_search_text not in lf_old_text:
                         if status_callback:
                             status_callback(f"Searching fuzzy match {b_idx + 1} in {path}...")
-                        normalized_old = normalize_text(old_text)
-                        normalized_search = normalize_text(search_text)
+                        normalized_old = normalize_text(lf_old_text)
+                        normalized_search = normalize_text(lf_search_text)
                         if normalized_search in normalized_old:
-                            source_lines = old_text.split('\n')
+                            source_lines = lf_old_text.split('\n')
                             found_exact = False
                             for i in range(len(source_lines)):
                                 for j in range(i, len(source_lines)):

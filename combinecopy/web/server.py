@@ -8,10 +8,11 @@ from rich.panel import Panel
 
 from combinecopy.utils import (
     get_files_recursive, safe_read_file, intelligent_json_fix, 
-    generate_tree_string, console, print_auto_summary, compute_new_text
+    generate_tree_string, console, print_auto_summary, compute_new_text,
+    detect_newline
 )
 from combinecopy.prompts import build_prompt
-from combinecopy.apply_core import commit_git
+from combinecopy.apply_core import commit_git, write_text_preserving
 
 app = Flask(__name__)
 
@@ -226,8 +227,8 @@ def apply_file():
             console.print(f"  [bold red]✗[/bold red] [red]Deleted File[/red] [bold]{path}[/bold]")
         else:
             os.makedirs(os.path.dirname(full_path), exist_ok=True)
-            with open(full_path, "w", encoding="utf-8") as f:
-                f.write(new_text)
+            original_newline = (detect_newline(full_path) if os.path.exists(full_path) else "") or "\n"
+            write_text_preserving(full_path, new_text, original_newline=original_newline)
                 
         if action == "modify":
             old_lines = old_text.splitlines(keepends=True)
