@@ -104,6 +104,7 @@ Three prompts can appear here, all of them recoverable:
 | `A` | Include every match as context blocks anyway |
 | `T` | Truncate to the first 25 matches |
 | `S` | Skip this search entirely |
+| Enter | Take the default: `F` when coverage is 80% or more, otherwise `A`. Truncate is never the default |
 
 If you truncate, the model is explicitly told how many matches were withheld, so it can narrow the query and search again rather than assuming it saw everything.
 

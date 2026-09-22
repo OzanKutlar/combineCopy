@@ -100,24 +100,48 @@ def _pick_search_targets(entry_path, resolved_map, scanned_files, root_dir):
     return []
 
 
+def _default_large_search_choice(coverage):
+    """Returns the Enter-key default for the oversized search prompt.
+
+    Once most of the file would be exposed anyway, the whole file is the honest
+    answer. Below that, every match as its own block. Truncate is never chosen.
+    """
+    if coverage >= SEARCH_COVERAGE_WARN_RATIO:
+        return 'F'
+    return 'A'
+
+
 def _confirm_large_search(query, rel_path, hit_count, coverage, total_lines):
-    """Asks how to handle an oversized search. Returns full/all/truncate/skip."""
+    """Asks how to handle an oversized search. Returns full/all/truncate/skip.
+
+    An empty answer takes the coverage-dependent default from
+    _default_large_search_choice.
+    """
+    default_key = _default_large_search_choice(coverage)
+    options = [
+        ('F', "Include the whole file instead"),
+        ('A', "Include every match as context blocks anyway"),
+        ('T', f"Truncate to the first {SEARCH_HIT_WARN_THRESHOLD} matches"),
+        ('S', "Skip this search entirely"),
+    ]
+
     console.print(f"\n[bold yellow]Search '{query}' in {rel_path} matched {hit_count} line(s).[/bold yellow]")
     console.print(
         f"With {SEARCH_CONTEXT_LINES} lines of context in both directions this would expose "
         f"{coverage * 100:.0f}% of the file ({total_lines} lines total)."
     )
-    console.print("  [cyan]F.[/cyan] Include the whole file instead")
-    console.print("  [cyan]A.[/cyan] Include every match as context blocks anyway")
-    console.print(f"  [cyan]T.[/cyan] Truncate to the first {SEARCH_HIT_WARN_THRESHOLD} matches")
-    console.print("  [cyan]S.[/cyan] Skip this search entirely")
+    for key, label in options:
+        suffix = " [dim](default)[/dim]" if key == default_key else ""
+        console.print(f"  [cyan]{key}.[/cyan] {label}{suffix}")
 
     choices = {'F': 'full', 'A': 'all', 'T': 'truncate', 'S': 'skip'}
     for _ in range(5):
-        ans = console.input("[bold]Choice (F/A/T/S): [/bold]").strip().upper()
+        ans = console.input(f"[bold]Choice (F/A/T/S) \\[{default_key}]: [/bold]").strip().upper()
+        if not ans:
+            ans = default_key
         if ans in choices:
             return choices[ans]
-        console.print("[red]Please enter F, A, T or S.[/red]")
+        console.print("[red]Please enter F, A, T or S, or press Enter for the default.[/red]")
     return 'skip'
 
 

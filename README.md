@@ -175,7 +175,7 @@ When two matches sit close enough that their context windows overlap, the window
 
 Queries match as literal substrings by default. Pass `"regex": true` for pattern matching, or `"case_sensitive": false` to widen the match. The 50-line context is deliberately fixed and not exposed to the model.
 
-Two interactive guards keep a sloppy query from swallowing the workspace. If a search returns more than 25 hits, or its merged windows would expose 80% or more of the file, you are asked whether to include the whole file, keep every block, truncate to the first 25 hits, or skip. If you truncate, the model is told how many matches were withheld so it can narrow the query itself. If the path is missing or does not resolve, you are shown how many files the current scan holds and can either search all of them or pick a subset through the file selector TUI.
+Two interactive guards keep a sloppy query from swallowing the workspace. If a search returns more than 25 hits, or its merged windows would expose 80% or more of the file, you are asked whether to include the whole file, keep every block, truncate to the first 25 hits, or skip. Pressing Enter takes the whole file when coverage is 80% or more, and keeps every block otherwise; truncate is never the default. If you truncate, the model is told how many matches were withheld so it can narrow the query itself. If the path is missing or does not resolve, you are shown how many files the current scan holds and can either search all of them or pick a subset through the file selector TUI.
 
 ### Environment Integrations
 
