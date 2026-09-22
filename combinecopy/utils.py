@@ -621,7 +621,12 @@ def parse_xml_to_dict(xml_str: str) -> dict:
             q_id = get_tag_val(q_chunk, "id")
             q_text = get_tag_val(q_chunk, "question")
             if q_id and q_text:
-                queries.append({"id": q_id, "question": q_text})
+                q_obj = {"id": q_id, "question": q_text}
+                for q_field in ("stack", "constraints", "already_tried", "want"):
+                    q_val = get_tag_val(q_chunk, q_field)
+                    if q_val and q_val.strip():
+                        q_obj[q_field] = q_val.strip()
+                queries.append(q_obj)
         data["queries"] = queries
         
     return data
@@ -1256,12 +1261,23 @@ def resolve_paths(requested_paths: set, known_files: list[str], root_dir: str) -
             
     return resolved, ambiguous, missing
 
+def _unwrap_cdata(value: str) -> str:
+    """Returns the text inside a CDATA wrapper, or the stripped text unchanged."""
+    stripped = (value or "").strip()
+    match = re.fullmatch(r'<!\[CDATA\[(.*)\]\]>', stripped, re.DOTALL)
+    return match.group(1).strip() if match else stripped
+
 def extract_consult_answers(text: str) -> dict | None:
     """Extracts external LLM consultation results from clipboard text."""
     # Try JSON first
     json_blocks = extract_json_from_text(text)
     for j_str in json_blocks:
-        data, _ = intelligent_json_fix(j_str)
+        # Answers are mostly code. Only heal the JSON when it genuinely fails to
+        # parse, because the healer rewrites quotes and can corrupt valid code.
+        try:
+            data = json.loads(j_str)
+        except json.JSONDecodeError:
+            data, _ = intelligent_json_fix(j_str)
         if data and isinstance(data, dict) and "answers" in data:
             answers = {}
             for item in data["answers"]:
@@ -1281,12 +1297,12 @@ def extract_consult_answers(text: str) -> dict | None:
     answers = {}
     # Standard strict format
     for ans in re.findall(r'<answer\s+id="(.*?)">(.*?)</answer>', m.group(1), re.DOTALL | re.IGNORECASE):
-        val = ans[1].strip()
+        val = _unwrap_cdata(ans[1])
         if val and val != "Your detailed answer here":
             answers[ans[0]] = val
     # Fallback for LLMs that use single quotes or no quotes
     for ans in re.findall(r'<answer\s+id=(?:\"|\'|)(.*?)(?:\"|\'|)>\s*(.*?)</answer>', m.group(1), re.DOTALL | re.IGNORECASE):
-        val = ans[1].strip()
+        val = _unwrap_cdata(ans[1])
         if ans[0] not in answers and val and val != "Your detailed answer here":
             answers[ans[0]] = val
     return answers if answers else None

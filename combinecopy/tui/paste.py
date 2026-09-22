@@ -125,18 +125,20 @@ class PasteBufferScreen(ModalScreen[str]):
         Binding("ctrl+d", "load_drop", "Load Drop"),
     ]
 
-    def __init__(self, initial_text: str = "", auto_editor: bool = False):
+    def __init__(self, initial_text: str = "", auto_editor: bool = False,
+                 title: str | None = None, analyzer=None):
         super().__init__()
         self.initial_text = initial_text or ""
         self.auto_editor = auto_editor
+        # Consult reuses this buffer for plain-text answers, so both the banner
+        # and the completeness check can be swapped out.
+        self.banner_text = title or "Paste Payload  -  Ctrl+S submit | Ctrl+E editor | Esc cancel"
+        self.analyzer = analyzer or analyze_payload
         self.temp_path = ""
 
     def compose(self) -> ComposeResult:
         with Vertical(id="paste-dialog"):
-            yield Label(
-                "Paste Payload  -  Ctrl+S submit | Ctrl+E editor | Esc cancel",
-                classes="paste-title",
-            )
+            yield Label(self.banner_text, classes="paste-title")
             yield TextArea(self.initial_text, id="paste-area")
             yield Label("", id="paste-status")
             with Horizontal(id="paste-buttons"):
@@ -166,7 +168,7 @@ class PasteBufferScreen(ModalScreen[str]):
         text = self.query_one("#paste-area", TextArea).text
         chars = len(text)
         lines = text.count("\n") + 1 if text else 0
-        ok, msg = analyze_payload(text)
+        ok, msg = self.analyzer(text)
         colour = "green" if ok else "yellow"
         self.query_one("#paste-status", Label).update(
             f"[dim]{chars} chars, {lines} lines[/dim]   [{colour}]{msg}[/{colour}]"
@@ -238,7 +240,7 @@ class PasteBufferScreen(ModalScreen[str]):
         if not text:
             self.notify("Nothing to submit.", severity="warning")
             return
-        ok, msg = analyze_payload(text)
+        ok, msg = self.analyzer(text)
         if not ok:
             self.notify(f"Submitting anyway: {msg}", severity="warning")
         self.dismiss(text)

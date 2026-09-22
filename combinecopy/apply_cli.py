@@ -40,6 +40,7 @@ from combinecopy.apply_core import (
 from combinecopy.mobile.env import find_meld, resolve_editor, run_editor, editor_display_name
 from combinecopy.mobile.inbox import read_latest_dropped_file, INBOX_DIR
 from combinecopy.mobile.clipboard import read_text_once
+from combinecopy.consult_core import complete_consultation, extract_consult_payload
 
 
 class _ConsoleDiffSink:
@@ -73,6 +74,8 @@ class ApplyCliSession:
         rehab_mode: bool = False,
         mobile_mode: bool = False,
         chain_mode: bool = False,
+        consult_transport: str = "clipboard",
+        consult_answer_budget: int = 250,
     ):
         self.root_dir = root_dir
         self.known_files = known_files or []
@@ -85,6 +88,8 @@ class ApplyCliSession:
         self.rehab_mode = rehab_mode
         self.mobile_mode = mobile_mode
         self.chain_mode = chain_mode
+        self.consult_transport = consult_transport
+        self.consult_answer_budget = consult_answer_budget
 
         self.payload: dict | None = None
         self.selected_idx: int | None = None
@@ -702,10 +707,48 @@ class ApplyCliSession:
             "commit_hash": commit_hash,
         }
 
+    def _handle_consult(self, consult_data: dict) -> None:
+        """Runs one consult round trip and puts the results on the clipboard."""
+        if not self.consult_mode:
+            console.print("[yellow]A CONSULT payload was ignored because consult mode is off. Run with --consult.[/yellow]")
+            return
+        from combinecopy.consult_cli import run_consult_cli
+        result = run_consult_cli(
+            consult_data.get("queries", []),
+            self.root_dir,
+            known_files=self.known_files,
+            transport=self.consult_transport,
+            answer_budget=self.consult_answer_budget,
+            read_inbound_text=self._read_inbound_text,
+        )
+        if not result:
+            console.print("[yellow]Consultation cancelled.[/yellow]")
+            return
+        try:
+            outcome = complete_consultation(result)
+        except Exception as e:
+            console.print(f"[bold red]Could not assemble the consultation results: {e}[/bold red]")
+            return
+        if outcome["on_clipboard"]:
+            console.print("[bold green]Consultation results copied to your clipboard.[/bold green] Paste them back into the local model's chat.")
+        elif outcome["where"]:
+            console.print(f"[bold yellow]Clipboard unavailable; results written to {outcome['where']}.[/bold yellow]")
+        else:
+            console.print("[bold red]Could not deliver the results to the clipboard or the outbox.[/bold red]")
+            return
+        console.print(
+            f"[dim]{outcome['answered']} of {outcome['total']} answered. "
+            f"{outcome['logged']} new answer(s) saved to the consult log.[/dim]"
+        )
+
     def reload_inbound(self, explicit_text: str | None = None) -> None:
         content = explicit_text if explicit_text is not None else self._read_inbound_text()
         if not content:
             console.print(f"[yellow]Clipboard is empty. (Inbox: {INBOX_DIR})[/yellow]")
+            return
+        consult_data = extract_consult_payload(content, prefer_xml=self.xml_mode)
+        if consult_data is not None:
+            self._handle_consult(consult_data)
             return
         exec_data, task_data, err = self._parse_payload_string(content)
         if task_data:
@@ -953,6 +996,8 @@ def run_apply_cli(
     rehab_mode: bool = False,
     mobile_mode: bool = False,
     chain_mode: bool = False,
+    consult_transport: str = "clipboard",
+    consult_answer_budget: int = 250,
 ) -> dict | None:
     """Runs the CLI apply listener session."""
     session = ApplyCliSession(
@@ -967,5 +1012,7 @@ def run_apply_cli(
         rehab_mode=rehab_mode,
         mobile_mode=mobile_mode,
         chain_mode=chain_mode,
+        consult_transport=consult_transport,
+        consult_answer_budget=consult_answer_budget,
     )
     return session.run()

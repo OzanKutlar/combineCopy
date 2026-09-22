@@ -151,7 +151,8 @@ The `off` word is only consumed when it appears on its own immediately after the
 | `--divide` | Enable Large Task Mode. Splits a sweeping request into sub-tasks tracked in `.cc_tasks.json`. | false | none |
 | `--revert` | Run the apply listener, but reverse all incoming modifications. | false | -r |
 | `--cli` | Enable CLI Mode, allowing the LLM to output terminal commands in its payload. | false | none |
-| `--consult` | Enable the consultation phase, permitting the AI to query external Expert LLMs. | false | none |
+| `--consult` | Enable the consultation phase, letting the AI ask anonymised knowledge questions of a larger external LLM. | false | none |
+| `--consult-transport <mode>` | How consult questions and answers travel: `clipboard`, `file` (via `~/.cc_consult`), or `both`. | clipboard | none |
 | `--xml` | Instruct the AI to output XML payloads instead of JSON, bypassing quote-escaping vulnerabilities. | false | -x |
 | `--json-select` | Parse a selection payload directly from the clipboard to automatically retrieve files, functions, and search results during the exploration phase. | false | -js |
 
@@ -265,7 +266,11 @@ If you get stuck, you can reveal hints progressively or fully reveal the AI's ex
 
 ### External LLM Consult
 
-If the AI gets stuck on a complex problem, it can trigger a consultation phase. It pauses, queries an external expert model, and brings the answers back into your local loop.
+Sometimes the model doing the work is small, local, or policy-restricted. It knows the shape of a solution but not the details: the right API, the safe way to create a temp file, the current signature of a library call. With `--consult`, it can stop and ask.
+
+It emits a `CONSULT` payload of up to three narrow, anonymised questions. The listener opens a review screen where you check them and edit them in place. Project identifiers, URLs, IPs, emails, local paths and anything that looks like a key are flagged, and sending flagged questions needs a second keypress. The questions go out as a ready-made prompt for a larger model, which replies in a plain `=== ANSWER Q1 ===` block format that needs no escaping. Copy the reply and the listener picks it up, restates each question next to its answer, and puts the results on your clipboard for the local model.
+
+Every answer is saved to `~/.cc_consult/consult_log.jsonl`, so a question you have asked before can be answered from the log with **F8** instead of another round trip. Set `consult_transport` to `file` or `both` to move questions and answers through `~/.cc_consult/outbox` and `inbox`. See [Asking a bigger model for help](docs/usecases/09-consulting-an-expert.md) for the full walkthrough.
 
 ---
 
@@ -302,6 +307,8 @@ When any setting differs from its built-in default, a dim one-line banner names 
 | `tfs` | on/off | off | Use TFVC instead of git |
 | `cli` | on/off | off | Let the AI emit terminal commands |
 | `consult` | on/off | off | Enable the external Expert LLM phase |
+| `consult_transport` | `clipboard` / `file` / `both` | `clipboard` | How consult questions and answers cross to the external model |
+| `consult_answer_budget` | number | 250 | Per-answer word budget requested from the external model |
 | `rehab` | on/off | off | Enable Rehab (active learning) mode |
 | `divide` | on/off | off | Enable Large Task Mode |
 | `diff` | on/off | off | Inject the uncommitted git or TFS diff |

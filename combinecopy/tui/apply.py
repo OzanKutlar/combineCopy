@@ -52,6 +52,7 @@ from combinecopy.apply_core import (
     commit_tfs,
 )
 from combinecopy.vcs_tfs import tfs_checkout, tfs_add, tfs_delete, tfs_checkin
+from combinecopy.consult_core import complete_consultation, extract_consult_payload
 from combinecopy.mobile.inbox import PayloadInbox, read_latest_dropped_file, INBOX_DIR
 from combinecopy.mobile.clipboard import read_text_once
 class RehabScreen(ModalScreen[bool]):
@@ -1233,7 +1234,7 @@ class AutoAgentApp(App):
         Binding("f", "fix_json", "Fix JSON"),
     ]
     TITLE = "CombineCopy — Auto Agent Listener"
-    def __init__(self, root_dir: str, known_files: list[str] | None = None, revert_mode: bool = False, ignore_initial_clipboard: bool = False, web_mode: bool = False, tfs_mode: bool = False, xml_mode: bool = False, consult_mode: bool = False, rehab_mode: bool = False, mobile_mode: bool = False, inbox=None):
+    def __init__(self, root_dir: str, known_files: list[str] | None = None, revert_mode: bool = False, ignore_initial_clipboard: bool = False, web_mode: bool = False, tfs_mode: bool = False, xml_mode: bool = False, consult_mode: bool = False, rehab_mode: bool = False, mobile_mode: bool = False, inbox=None, consult_transport: str = "clipboard", consult_answer_budget: int = 250):
         super().__init__()
         self.root_dir = root_dir
         self.known_files = known_files or []
@@ -1247,6 +1248,9 @@ class AutoAgentApp(App):
         self.consult_mode = consult_mode
         self.rehab_mode = rehab_mode
         self.is_consulting = False
+        self.consult_transport = consult_transport
+        self.consult_answer_budget = consult_answer_budget
+        self._consult_screen = None
         self._meld_running = False
         self.ignore_initial_clipboard = ignore_initial_clipboard
         self.last_clipboard = ""
@@ -1381,15 +1385,20 @@ class AutoAgentApp(App):
             if not content:
                 return
 
-            # Check for consult results FIRST if we are consulting
-            if getattr(self, 'is_consulting', False):
-                answers = extract_consult_answers(content)
-                if answers:
-                    self.last_clipboard = content
-                    self.app.pop_screen()
-                    self.is_consulting = False
-                    self._finish_consultation(answers)
-                    return
+            if self.is_consulting:
+                # While a consultation is open, clipboard changes are only ever
+                # candidate answers. Loading a payload behind the modal would
+                # strand it there, so nothing else is parsed.
+                self.last_clipboard = content
+                if self._consult_screen is not None:
+                    self._consult_screen.receive_answer_text(content, source="the clipboard")
+                return
+
+            consult_data = extract_consult_payload(content, prefer_xml=self.xml_mode)
+            if consult_data is not None:
+                self.last_clipboard = content
+                self._on_consult_payload(consult_data)
+                return
                     
             self.last_clipboard = content
             
@@ -1405,9 +1414,6 @@ class AutoAgentApp(App):
                         elif data.get("phase") == "TASK" and "tasks" in data:
                             self.exit({"type": "task_division", "data": data})
                             return
-                        elif data.get("phase") == "CONSULT":
-                            self.load_consult_payload(data)
-                            return
                             
             # Fallback to JSON
             if '"phase":' in content and ('"EXECUTION"' in content or '"CONSULT"' in content or '"TASK"' in content):
@@ -1422,18 +1428,12 @@ class AutoAgentApp(App):
                             elif data.get("phase") == "TASK" and "tasks" in data:
                                 self.exit({"type": "task_division", "data": data})
                                 return
-                            elif data.get("phase") == "CONSULT" and getattr(self, 'consult_mode', False):
-                                self.load_consult_payload(data)
-                                return
                     except json.JSONDecodeError as e:
                         fixed_data, fixed_str = intelligent_json_fix(json_str)
                         if fixed_data and isinstance(fixed_data, dict):
                             if fixed_data.get("phase") == "EXECUTION" and "files" in fixed_data:
                                 self.notify("Intelligently auto-fixed JSON syntax errors!", title="Auto-Fix Success", severity="info")
                                 self.load_payload(fixed_data)
-                                return
-                            elif fixed_data.get("phase") == "CONSULT":
-                                self.load_consult_payload(fixed_data)
                                 return
                         if '"EXECUTION"' in json_str and '"phase"' in json_str:
                             self.show_json_error(e, json_str)
@@ -1443,29 +1443,67 @@ class AutoAgentApp(App):
         except Exception:
             pass
 
+    def _on_consult_payload(self, data: dict) -> None:
+        if not self.consult_mode:
+            self.notify(
+                "A CONSULT payload was ignored because consult mode is off. Run with --consult to enable it.",
+                severity="warning",
+            )
+            return
+        self.load_consult_payload(data)
+
     def load_consult_payload(self, data: dict) -> None:
         from combinecopy.tui.consult import ConsultationScreen
+        queries = data.get("queries") or []
+        if not queries:
+            self.notify("The CONSULT payload contained no usable questions.", severity="warning")
+            return
+        screen = ConsultationScreen(
+            queries,
+            self.root_dir,
+            known_files=self.known_files,
+            transport=self.consult_transport,
+            answer_budget=self.consult_answer_budget,
+        )
         self.is_consulting = True
+        self._consult_screen = screen
         self.query_one("#status-label", Label).update("[bold cyan]Consultation Phase Active[/bold cyan]")
-        self.app.push_screen(ConsultationScreen(data, self.xml_mode), self.on_consult_cancelled)
+        self.app.push_screen(screen, self._on_consult_closed)
         
-    def on_consult_cancelled(self, cancelled: bool | None) -> None:
-        if cancelled:
-            self.is_consulting = False
-            self.query_one("#status-label", Label).update("Waiting for AI...")
-            
-    def _finish_consultation(self, answers: dict) -> None:
-        buffer = ["--- RESEARCH RESULTS ---", "Here is the external knowledge you requested. Use this to formulate your PLANNING and EXECUTION.\n"]
-        for q_id, ans in answers.items():
-            buffer.append(f"=====\nQuery ID: {q_id}\n=====\n{ans}\n")
-        buffer.append("\n--- SYSTEM REMINDER ---")
-        buffer.append("You have completed the CONSULT phase. Please enter PLANNING mode or EXECUTION mode to proceed.")
-        
-        final_text = "\n".join(buffer)
-        if copy_to_clipboard(final_text):
-            self.notify("Consultation results formatted and copied to clipboard!", title="Success")
+    def _on_consult_closed(self, result: dict | None) -> None:
+        self.is_consulting = False
+        self._consult_screen = None
         self.query_one("#status-label", Label).update("Waiting for AI...")
-        self.query_one("#ai-markdown", Markdown).update("**Consultation Complete!**\n\nThe external answers have been copied to your clipboard. Paste them back to the local AI.")
+        if not result:
+            self.notify("Consultation cancelled.", severity="information")
+            return
+        self._finish_consultation(result)
+            
+    def _finish_consultation(self, result: dict) -> None:
+        try:
+            outcome = complete_consultation(result)
+        except Exception as error:
+            self.notify(f"Could not assemble the consultation results: {error}", severity="error")
+            return
+        if outcome["on_clipboard"]:
+            # Our own write must not be re-read as a new inbound payload.
+            self.last_clipboard = outcome["text"].strip()
+            where = "copied to your clipboard"
+        elif outcome["where"]:
+            where = f"written to {outcome['where']}"
+        else:
+            self.notify("Could not deliver the results to the clipboard or the outbox.", severity="error")
+            return
+        self.notify(f"Consultation results {where}.", title="Consult")
+        summary = (
+            f"**Consultation complete.** {outcome['answered']} of {outcome['total']} question(s) answered.\n\n"
+            f"The results were {where}. Paste them back into the local model's chat."
+        )
+        if outcome["logged"]:
+            summary += f"\n\n{outcome['logged']} new answer(s) saved to the local consult log for reuse."
+        self.query_one("#ai-markdown", Markdown).update(summary)
+        
+
     def _normalize_text(self, text: str) -> str:
         return normalize_text(text)
 

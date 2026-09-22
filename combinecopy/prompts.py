@@ -385,35 +385,56 @@ Output the payload wrapped in a markdown code block:
 The user's tool will automatically parse this and copy the requested context into your clipboard, along with a note reporting how many matches each search found.
 </file_culling_instructions>"""
 
-CONSULT_DEFAULT = r"""CONSULT: If you encounter a complex algorithm, unknown API, or syntax where you are unsure of the optimal approach, you can pause your work and consult an external Expert AI.
-Output your request strictly in pure JSON format:
+CONSULT_DEFAULT = r"""CONSULT: Use this when you are missing *knowledge*, not when you are missing a plan. Good reasons to consult: you do not know the right API, library call, or idiom; you are unsure of its current signature or behaviour; or you are unsure of the safe, correct way to do something (escaping, temp files, subprocesses, cryptography, concurrency, path handling). Do not consult about anything you can work out from the code in front of you.
+Consulting is available at any point before EXECUTION. When you consult, output ONLY the CONSULT payload and then stop. The user will carry your questions to a larger expert model that has no access to this conversation, and will paste the answers back to you.
+Output your request strictly in pure JSON format, wrapped in a markdown code block:
 ```json
 {
   "phase": "CONSULT",
   "queries": [
     {
       "id": "Q1",
-      "question": "What is the most memory-efficient way to iterate over a highly nested JSON structure in C#?"
+      "question": "How do I write a file atomically, so that a crash mid-write never leaves a half-written file behind?",
+      "stack": "Python 3.11, standard library only, must work on both Windows and Linux",
+      "constraints": "The target file usually exists already and must be replaced, not appended to.",
+      "already_tried": "Opening the target with open(path, 'w') and writing directly, which leaves a truncated file if the process is killed.",
+      "want": "snippet"
     }
   ]
 }
 ```
-**CRITICAL DATA LEAKAGE RULE:** You MUST abstract away all proprietary company names, internal URLs, and specific variable names (e.g., replace `SuperSecretBillingAPI` with `GenericAPI`). Do NOT leak internal IP. Act as if you are asking a question on a public programming forum."""
+**Writing a good query:**
+1. One concept per query, and at most 3 queries per CONSULT. A narrow question gets a precise answer.
+2. Only `question` is required. `stack`, `constraints`, `already_tried` and `want` are optional, but they make answers far more useful. `want` is one of `snippet`, `explanation` or `comparison`.
+3. Name the public technology precisely: language and version, framework, and library names and versions. These are not secrets, and without them the expert has to guess.
+4. Each query must stand on its own. The expert cannot see your files, this conversation, or your other queries.
+**CRITICAL DATA LEAKAGE RULE:** Your questions leave this environment. Rename every project-specific name to a neutral one before asking: classes, functions, variables, files, database tables, hostnames, URLs, and company or product names (e.g. `SuperSecretBillingAPI` becomes `ExternalApi`). Never paste code from this codebase; describe its shape instead. Never include credentials, keys, tokens, email addresses or IP addresses. Write each question as if posting it to a public programming forum."""
 
-CONSULT_XML = r"""CONSULT: If you encounter a complex algorithm, unknown API, or syntax where you are unsure of the optimal approach, you can pause your work and consult an external Expert AI.
-Output your request strictly in pure XML format:
+CONSULT_XML = r"""CONSULT: Use this when you are missing *knowledge*, not when you are missing a plan. Good reasons to consult: you do not know the right API, library call, or idiom; you are unsure of its current signature or behaviour; or you are unsure of the safe, correct way to do something (escaping, temp files, subprocesses, cryptography, concurrency, path handling). Do not consult about anything you can work out from the code in front of you.
+Consulting is available at any point before EXECUTION. When you consult, output ONLY the CONSULT payload and then stop. The user will carry your questions to a larger expert model that has no access to this conversation, and will paste the answers back to you.
+Output your request strictly in pure XML format, wrapped in a markdown code block:
 ```xml
-<antigravity_payload>
+<{root}>
   <phase>CONSULT</phase>
   <queries>
     <query>
       <id>Q1</id>
-      <question>What is the most memory-efficient way to iterate over a highly nested JSON structure in C#?</question>
+      <question><![CDATA[How do I write a file atomically, so that a crash mid-write never leaves a half-written file behind?]]></question>
+      <stack><![CDATA[Python 3.11, standard library only, must work on both Windows and Linux]]></stack>
+      <constraints><![CDATA[The target file usually exists already and must be replaced, not appended to.]]></constraints>
+      <already_tried><![CDATA[Opening the target with open(path, 'w') and writing directly, which leaves a truncated file if the process is killed.]]></already_tried>
+      <want>snippet</want>
     </query>
   </queries>
-</antigravity_payload>
+</{root}>
 ```
-**CRITICAL DATA LEAKAGE RULE:** You MUST abstract away all proprietary company names, internal URLs, and specific variable names (e.g., replace `SuperSecretBillingAPI` with `GenericAPI`). Do NOT leak internal IP. Act as if you are asking a question on a public programming forum."""
+**Writing a good query:**
+1. One concept per query, and at most 3 queries per CONSULT. A narrow question gets a precise answer.
+2. Only `<question>` is required. `<stack>`, `<constraints>`, `<already_tried>` and `<want>` are optional, but they make answers far more useful. `<want>` is one of `snippet`, `explanation` or `comparison`.
+3. Name the public technology precisely: language and version, framework, and library names and versions. These are not secrets, and without them the expert has to guess.
+4. Each query must stand on its own. The expert cannot see your files, this conversation, or your other queries.
+5. Wrap every text value in `<![CDATA[ ... ]]>` so that generics such as `List<T>` cannot break the parser.
+**CRITICAL DATA LEAKAGE RULE:** Your questions leave this environment. Rename every project-specific name to a neutral one before asking: classes, functions, variables, files, database tables, hostnames, URLs, and company or product names (e.g. `SuperSecretBillingAPI` becomes `ExternalApi`). Never paste code from this codebase; describe its shape instead. Never include credentials, keys, tokens, email addresses or IP addresses. Write each question as if posting it to a public programming forum.""".replace("{root}", "antigravity_payload")
 
 REST_DEFAULT = r"""<task_checklist_guideline>
 **Purpose**: A detailed checklist to organize your work. Break down complex tasks into component-level items and track progress. Present this checklist directly in the chat. Do NOT treat it as a file (do not use paths like C:\Users\Ozan\task.md).
@@ -615,46 +636,57 @@ Example:
 def get_consult(xml_mode: bool = False) -> str:
     return CONSULT_XML if xml_mode else CONSULT_DEFAULT
 
-def build_external_consult_prompt(queries: list, xml_mode: bool = False) -> str:
-    lines = [
-        "You are an Expert System Architect. I am an AI agent working in a secure environment. I need you to answer the following technical queries to help me build my implementation plan.",
-        "",
-        "RULES:",
-        "1. Provide highly detailed pseudo-code, algorithms, and explanations.",
-        "2. Do NOT write full file implementations; focus on the core logic and design patterns.",
-    ]
-    
-    if xml_mode:
-        lines.append("3. You MUST format your response strictly using the XML tags below. Do NOT include markdown blocks around the XML.")
-        lines.append("")
-        lines.append("<consultation_results>")
-        for q in queries:
-            q_id = q.get("id", "")
-            lines.append(f'  <answer id="{q_id}">Your detailed answer here</answer>')
-        lines.append("</consultation_results>")
-    else:
-        lines.append("3. You MUST format your response strictly using the JSON format below. Output it in a markdown code block (```json).")
-        lines.append("")
-        lines.append("```json")
-        lines.append("{")
-        lines.append('  "answers": [')
-        for i, q in enumerate(queries):
-            q_id = q.get("id", "")
-            comma = "," if i < len(queries) - 1 else ""
-            lines.append("    {")
-            lines.append(f'      "id": "{q_id}",')
-            lines.append('      "answer": "Your detailed answer here"')
-            lines.append("    }" + comma)
-        lines.append("  ]")
-        lines.append("}")
-        lines.append("```")
+_WANT_LABELS = {
+    "snippet": "a minimal working snippet",
+    "explanation": "an explanation, with code only where it helps",
+    "comparison": "a comparison of the realistic options",
+}
 
-    lines.append("")
-    lines.append("--- QUERIES ---")
-    for q in queries:
-        q_id = q.get("id", "")
-        q_text = q.get("question", "")
-        lines.append(f"[ID: {q_id}] {q_text}")
+
+def _format_external_query(query: dict) -> list:
+    lines = ["", f"[{query.get('id', '')}] {query.get('question', '')}"]
+    for key, label in (("stack", "Stack"), ("constraints", "Constraints"), ("already_tried", "Already tried")):
+        value = query.get(key)
+        if value:
+            lines.append(f"    {label}: {value}")
+    want = _WANT_LABELS.get(str(query.get("want", "")).strip().lower())
+    if want:
+        lines.append(f"    Wanted: {want}")
+    return lines
+
+
+def build_external_consult_prompt(queries: list, xml_mode: bool = False, answer_budget: int = 250) -> str:
+    """Builds the prompt the user pastes into the external expert model.
+
+    xml_mode is still accepted so existing callers keep working, but it no
+    longer changes anything. Answers are mostly code, and code survives a
+    plain delimiter format far better than JSON or XML escaping.
+    """
+    budget = answer_budget if isinstance(answer_budget, int) and answer_budget > 0 else 250
+    lines = [
+        "You are a senior software engineer answering questions from a capable junior engineer.",
+        "They work in an isolated environment with no web access and no documentation, so your reply is the only reference they will get.",
+        "The questions have been anonymised, so any project-specific names in them are placeholders.",
+        "",
+        "For EACH question:",
+        "1. Start with a direct answer in one or two sentences.",
+        "2. Unless only an explanation or a comparison is asked for, give a minimal, self-contained, correct code snippet in a fenced code block. Use the stated language and version, real API names and signatures, and prefer the standard library.",
+        "3. List the pitfalls: security issues, edge cases, platform differences, and the mistakes a less experienced engineer is likely to make.",
+        "4. State any assumption you made about versions or the environment.",
+        "5. If a question is ambiguous or its premise is wrong, say so briefly and answer the most likely intended question.",
+        "",
+        f"Keep each answer under about {budget} words, not counting code. Do not ask follow-up questions, because the asker cannot reply.",
+        "",
+        "Format your whole reply exactly as below: one block per question, in this order, with nothing before the first block.",
+        "Put code in normal markdown fences inside a block. Do not wrap the reply in JSON or XML.",
+        "",
+    ]
+    for query in queries:
+        q_id = query.get("id", "")
+        lines.extend([f"=== ANSWER {q_id} ===", "<your answer>", f"=== END {q_id} ===", ""])
+    lines.append("--- QUESTIONS ---")
+    for query in queries:
+        lines.extend(_format_external_query(query))
     return "\n".join(lines)
 def get_execution(agent_type: str = "default", xml_mode: bool = False, consult: bool = False, divide: bool = False) -> str:
     parts = [MODE_DESCRIPTIONS_HEADER]
@@ -698,7 +730,7 @@ def get_ast(ast_map: str) -> str:
 
 def get_file_context(file_context: str) -> str:
     return f"--- FILE CONTEXT ---\n{file_context}"
-def get_system_prompt_important(agent_type: str = "default", xml_mode: bool = False, divide: bool = False) -> str:
+def get_system_prompt_important(agent_type: str = "default", xml_mode: bool = False, divide: bool = False, consult: bool = False) -> str:
     mode_name = "XML" if xml_mode else "JSON"
     code_block = "xml" if xml_mode else "json"
     
@@ -707,6 +739,8 @@ def get_system_prompt_important(agent_type: str = "default", xml_mode: bool = Fa
         "CRITICAL: You must ALWAYS start in PLANNING mode.",
         f"Do NOT output EXECUTION {mode_name} yet."
     ]
+    if consult:
+        lines.append(f"If you are missing knowledge (an API, a library call, or the safe way to do something), you may output a CONSULT {mode_name} payload before EXECUTION and then wait for the answers.")
     if divide:
         lines.append(f"When you enter PLANNING mode, present your task division plan as inline markdown. In TASK mode, you MUST wrap the {mode_name} output in a markdown code block (```{code_block}).")
         lines.append(f"Wait for the user to review and approve your plan before outputting the TASK payload.")
@@ -779,6 +813,6 @@ def build_prompt(
     if user_request:
         parts.append(get_user_prompt(user_request, reminder=True))
         
-    parts.append(get_system_prompt_important(agent_type, xml_mode, divide))
+    parts.append(get_system_prompt_important(agent_type, xml_mode, divide, consult))
     
     return "\n\n".join(parts)

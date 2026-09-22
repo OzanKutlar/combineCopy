@@ -26,6 +26,8 @@ DEFAULTS = {
     'tfs': ('bool', False, 'Use TFVC (tf.exe) instead of git'),
     'cli': ('bool', False, 'Let the AI emit terminal commands in its payload'),
     'consult': ('bool', False, 'Enable the external Expert LLM consult phase'),
+    'consult_transport': ('choice', 'clipboard', 'How consult text crosses to the external model: clipboard, file or both'),
+    'consult_answer_budget': ('int', 250, 'Per-answer word budget requested from the external model'),
     'rehab': ('bool', False, 'Enable Rehab (active learning) mode'),
     'divide': ('bool', False, 'Enable Large Task Mode'),
     'diff': ('bool', False, 'Inject the uncommitted git or TFS diff into the prompt'),
@@ -44,7 +46,11 @@ DEFAULTS = {
     'editor': ('nullable-str', None, 'Editor command override (auto = detect)'),
 }
 
-CHOICES = {'prompt_ui': ('cli', 'tui'), 'apply_ui': ('cli', 'tui')}
+CHOICES = {
+    'prompt_ui': ('cli', 'tui'),
+    'apply_ui': ('cli', 'tui'),
+    'consult_transport': ('clipboard', 'file', 'both'),
+}
 
 # argparse dest -> settings key. None means "no persistent setting; off unless asked".
 ARG_TOGGLES = {
@@ -293,6 +299,10 @@ def resolve_settings(args, settings):
 
     if getattr(args, 'apply_ui', None) is None:
         args.apply_ui = settings.get('apply_ui') or 'tui'
+
+    if getattr(args, 'consult_transport', None) is None:
+        args.consult_transport = settings.get('consult_transport') or 'clipboard'
+    args.consult_answer_budget = settings.get('consult_answer_budget', 250)
 
     if getattr(args, 'limit', None) is None:
         args.limit = settings.get('limit', 100)

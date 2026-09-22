@@ -696,7 +696,8 @@ def main():
     add_toggle("--file-culling", "--file-cull", dest="file_culling", help_text="Enable file culling / AST selection mode")
     add_toggle("-js", "--json-select", dest="json_select", help_text="Parse a JSON selection payload from clipboard to automatically select files/functions")
     add_toggle("-x", "--xml", help_text="Instruct the AI to use XML for payloads instead of JSON to completely avoid quote escaping issues.")
-    add_toggle("--consult", help_text="Enable CONSULT phase for the AI to ask abstract questions to an external LLM.")
+    add_toggle("--consult", help_text="Enable the CONSULT phase, letting the AI ask anonymised knowledge questions of a larger external LLM.")
+    parser.add_argument("--consult-transport", choices=("clipboard", "file", "both"), default=None, help="How consult questions and answers travel: clipboard, file (via ~/.cc_consult), or both.")
     add_toggle("-d", "--diff", help_text="Inject current uncommitted git diff directly into the prompt context.")
     add_toggle("--divide", help_text="Enable Large Task Mode to divide complex requests into sub-tasks.")
     add_toggle("--prune", help_text="Send context pruning instructions with the system prompt.")
@@ -763,7 +764,7 @@ def main():
     if args.system_only:
         agent_type = "cli" if args.cli else "default"
         sys_prompt = get_system_prompt(agent_type=agent_type, file_cull=args.file_culling, xml_mode=args.xml, consult=args.consult, custom_rules=custom_rules, rehab=args.rehab, divide=args.divide, prune=args.prune)
-        important = get_system_prompt_important(agent_type=agent_type, xml_mode=args.xml, divide=args.divide)
+        important = get_system_prompt_important(agent_type=agent_type, xml_mode=args.xml, divide=args.divide, consult=args.consult)
         
         full_sys_prompt = f"--- SYSTEM INSTRUCTIONS ---\n{sys_prompt}\n\n{important}"
         
@@ -847,9 +848,9 @@ def main():
         # accidentally enabled keyboard macro mode. It should track --web-apply,
         # matching the other AutoAgentApp construction site below.
         if getattr(args, 'apply_ui', 'tui') == 'cli':
-            result = run_apply_cli(root_dir, revert_mode=args.revert, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile, chain_mode=args.apply_chain)
+            result = run_apply_cli(root_dir, revert_mode=args.revert, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile, chain_mode=args.apply_chain, consult_transport=args.consult_transport, consult_answer_budget=args.consult_answer_budget)
         else:
-            app = AutoAgentApp(root_dir, revert_mode=args.revert, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile)
+            app = AutoAgentApp(root_dir, revert_mode=args.revert, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile, consult_transport=args.consult_transport, consult_answer_budget=args.consult_answer_budget)
             result = app.run()
         if isinstance(result, dict) and result.get("type") == "task_division":
             data = result.get("data")
@@ -1210,7 +1211,7 @@ def main():
                                 parts.append(get_git_diff(git_diff_text, tfs_mode=args.tfs))
                         if batch_num == batch_count and user_request_data:
                             parts.append(get_user_prompt(user_request_data["request"], reminder=True))
-                            parts.append(get_system_prompt_important(agent_type, xml_mode=args.xml, divide=args.divide))
+                            parts.append(get_system_prompt_important(agent_type, xml_mode=args.xml, divide=args.divide, consult=args.consult))
                             
                         full_text = "\n\n".join(parts)
 
@@ -1263,9 +1264,9 @@ def main():
             phase_name += " [WEB MACRO MODE]"
         console.print(f"\n[bold cyan]Phase: {phase_name}[/bold cyan]")
         if getattr(args, 'apply_ui', 'tui') == 'cli':
-            result = run_apply_cli(root_dir, all_known_files, revert_mode=args.revert, ignore_initial_clipboard=True, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile, chain_mode=args.apply_chain)
+            result = run_apply_cli(root_dir, all_known_files, revert_mode=args.revert, ignore_initial_clipboard=True, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile, chain_mode=args.apply_chain, consult_transport=args.consult_transport, consult_answer_budget=args.consult_answer_budget)
         else:
-            app = AutoAgentApp(root_dir, all_known_files, revert_mode=args.revert, ignore_initial_clipboard=True, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile)
+            app = AutoAgentApp(root_dir, all_known_files, revert_mode=args.revert, ignore_initial_clipboard=True, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile, consult_transport=args.consult_transport, consult_answer_budget=args.consult_answer_budget)
             result = app.run()
         if isinstance(result, dict) and result.get("type") == "task_division":
             data = result.get("data")
