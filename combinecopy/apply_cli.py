@@ -675,12 +675,24 @@ class ApplyCliSession:
             console.print("[yellow]No payload loaded.[/yellow]")
             return None
         msg = self.payload.get("commit_message", "Auto-commit from AI agent")
-        applied = [f for f in self.payload.get("files", []) if f.get("_status") == "applied"]
+        files = self.payload.get("files", [])
+        applied = [f for f in files if f.get("_status") == "applied"]
         paths = [f.get("path") for f in applied if f.get("path") and f.get("action", "").lower() != "command"]
 
         if not paths and not any(f.get("action", "").lower() == "command" for f in applied):
             console.print("[yellow]No applied changes to commit.[/yellow]")
             return None
+
+        if len(applied) < len(files):
+            console.print("[yellow]Not all changes have been applied.[/yellow]")
+            try:
+                ans = console.input("[bold yellow]Are you sure you want to commit? (y/N): [/bold yellow]").strip().lower()
+            except (KeyboardInterrupt, EOFError):
+                console.print("\n[yellow]Commit cancelled.[/yellow]")
+                return None
+            if ans not in ("y", "yes"):
+                console.print("[yellow]Commit cancelled.[/yellow]")
+                return None
 
         commit_hash = None
         if self.tfs_mode:
