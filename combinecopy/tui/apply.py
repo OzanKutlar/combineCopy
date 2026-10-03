@@ -55,283 +55,23 @@ from combinecopy.vcs_tfs import tfs_checkout, tfs_add, tfs_delete, tfs_checkin
 from combinecopy.consult_core import complete_consultation, extract_consult_payload
 from combinecopy.mobile.inbox import PayloadInbox, read_latest_dropped_file, INBOX_DIR
 from combinecopy.mobile.clipboard import read_text_once
-class RehabScreen(ModalScreen[bool]):
-    CSS = """
-    RehabScreen {
-        align: center middle;
-        background: rgba(0, 0, 0, 0.8);
-    }
-    #rehab-dialog {
-        width: 95%;
-        height: 95%;
-        border: solid #d08c60;
-        background: #2d2825;
-        padding: 1 2;
-    }
-    .rehab-title {
-        text-align: center;
-        text-style: bold;
-        color: #d08c60;
-        margin-bottom: 1;
-        background: #4a3f39;
-        padding: 1;
-    }
-    #rehab-body {
-        height: 1fr;
-    }
-    #rehab-left {
-        width: 50%;
-        border-right: solid #5a4d45;
-        padding-right: 1;
-        overflow-y: auto;
-    }
-    #rehab-right {
-        width: 50%;
-        padding-left: 1;
-    }
-    #rehab-instructions {
-        height: auto;
-    }
-    #rehab-solution-container {
-        height: 1fr;
-    }
-    #rehab-hidden-msg {
-        height: 1fr;
-        content-align: center middle;
-        color: #a0a0a0;
-        border: dashed #5a4d45;
-        padding: 2;
-    }
-    #rehab-solution {
-        height: 1fr;
-        border: solid #5a4d45;
-        background: #1e1a18;
-        padding: 1;
-        overflow-y: auto;
-        display: none;
-    }
-    #rehab-footer {
-        height: 3;
-        align: right middle;
-        border-top: solid #5a4d45;
-        margin-top: 1;
-    }
-    Button {
-        margin: 0 1;
-    }
-    """
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("o", "open_editor", "Open in Editor"),
-        Binding("m", "verify_meld", "Verify in Meld"),
-        Binding("r", "reveal_solution", "Reveal AI Solution"),
-        Binding("h", "show_hint", "Show Hint"),
-    ]
-    def __init__(self, file_obj: dict, root_dir: str, original_text: str):
-        super().__init__()
-        self.file_obj = file_obj
-        self.root_dir = root_dir
-        self.original_text = original_text
-        self.file_path = file_obj.get("path", "")
-        self.full_path = os.path.join(self.root_dir, self.file_path)
-        self._solution_loaded = False
-        self.filename = os.path.basename(self.file_path)
-        self.all_hints = []
-        self.revealed_hints = 0
-        
-        action = self.file_obj.get("action", "modify").upper()
-        if action == "CREATE":
-            self.all_hints.extend(self.file_obj.get("hints", []))
-        else:
-            for b in self.file_obj.get("search_replace", []):
-                self.all_hints.extend(b.get("hints", []))
-                
-        self.original_newline = detect_newline(self.full_path) if os.path.exists(self.full_path) else "\n"
-        if not self.original_newline:
-            self.original_newline = "\n"
-            
-        fd, self.temp_human_path = tempfile.mkstemp(suffix=f"_HUMAN_{self.filename}", text=True)
-        os.close(fd)
-        _write_text_preserving(self.temp_human_path, self.original_text, original_newline=self.original_newline)
-
-    def on_unmount(self) -> None:
-        try:
-            if os.path.exists(self.temp_human_path):
-                os.remove(self.temp_human_path)
-        except:
-            pass
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="rehab-dialog"):
-            yield Label(f"Rehab Mode: {self.file_path}", classes="rehab-title")
-            with Horizontal(id="rehab-body"):
-                with Vertical(id="rehab-left"):
-                    yield Label("Instructions", classes="panel-title")
-                    yield Markdown(self._build_instructions_md(), id="rehab-instructions")
-                with Vertical(id="rehab-right"):
-                    yield Label("AI Solution", classes="panel-title")
-                    with Vertical(id="rehab-solution-container"):
-                        yield Label("Solution is hidden to encourage active recall.\n\nPress 'r' or click 'Reveal AI Code' to view the AI's exact changes.", id="rehab-hidden-msg")
-                        yield RichLog(id="rehab-solution", highlight=True)
-            with Horizontal(id="rehab-footer"):
-                yield Button("Open in Editor (o)", id="btn-editor", variant="primary")
-                yield Button("Verify in Meld (m)", id="btn-meld", variant="success")
-                yield Button("Hint (h)", id="btn-hint", variant="default", disabled=len(self.all_hints) == 0)
-                yield Button("Reveal AI Code (r)", id="btn-reveal", variant="warning")
-                yield Button("Cancel", id="btn-cancel", variant="error")
-
-    def _build_instructions_md(self) -> str:
-        md = []
-        action = self.file_obj.get("action", "modify").upper()
-        if action == "CREATE":
-            md.append("### Create File")
-            md.append(f"**Path:** `{self.file_path}`")
-            if "instruction" in self.file_obj:
-                md.append(f"**Instruction:** {self.file_obj['instruction']}")
-            else:
-                md.append("**Instruction:** Write the entire file based on the context.")
-        else:
-            md.append(f"### Modify File: `{self.file_path}`")
-            blocks = self.file_obj.get("search_replace", [])
-            for i, b in enumerate(blocks):
-                md.append(f"#### Block {i+1}")
-                inst = b.get("instruction", "*(No instruction provided by AI)*")
-                md.append(f"**Task:** {inst}")
-                search_code = b.get("search", "")
-                md.append("\n**Target Code:**")
-                md.append(f"```python\n{search_code}\n```")
-                md.append("---")
-                
-        if self.revealed_hints > 0:
-            md.append("\n### Hints")
-            for i in range(self.revealed_hints):
-                md.append(f"{i+1}. {self.all_hints[i]}")
-                
-        return "\n".join(md)
-    def action_cancel(self) -> None:
-        self.dismiss(False)
-
-    def action_show_hint(self) -> None:
-        if self.revealed_hints < len(self.all_hints):
-            self.revealed_hints += 1
-            self.query_one("#rehab-instructions", Markdown).update(self._build_instructions_md())
-            if self.revealed_hints >= len(self.all_hints):
-                self.query_one("#btn-hint", Button).disabled = True
-    def action_open_editor(self) -> None:
-        line_num = 1
-        blocks = self.file_obj.get("search_replace", [])
-        if blocks:
-            line_num = find_line_number(self.original_text, blocks[0].get("search", ""))
-        from combinecopy.mobile.env import resolve_editor, editor_display_name, is_terminal_editor
-
-        editor = resolve_editor()
-        if not editor:
-            self.notify("No editor found. Try: pkg install micro", severity="error")
-            return
-
-        base = os.path.basename(editor[0]).lower()
-        argv = list(editor)
-        if "notepad++" in base:
-            argv.append(f"-n{line_num}")
-        elif base.split(".")[0] in ("micro", "nano", "vi", "vim", "nvim"):
-            argv.append(f"+{line_num}")
-        argv.append(self.temp_human_path)
-
-        try:
-            if is_terminal_editor(editor[0]):
-                # Terminal editors take over the TTY, so the TUI must step aside.
-                suspend = getattr(self.app, "suspend", None)
-                if suspend is not None:
-                    with suspend():
-                        subprocess.run(argv, check=False)
-                else:
-                    subprocess.run(argv, check=False)
-                self.notify(
-                    f"Returned from {editor_display_name()}. Verify in Meld when ready.",
-                    severity="information",
-                )
-            else:
-                subprocess.Popen(argv)
-                self.notify("Editor opened. Edit your copy, save, then Verify in Meld.", severity="info")
-        except Exception as e:
-            self.notify(f"Failed to open editor: {e}", severity="error")
-
-    def action_verify_meld(self) -> None:
-        self.run_worker(self._run_meld, exclusive=True)
-
-    async def _run_meld(self) -> None:
-        ai_text = compute_new_text(self.file_obj, self.original_text)
-        base_name = os.path.basename(self.file_path)
-        fd_ai, path_ai = tempfile.mkstemp(suffix=f"_AI_{base_name}", text=True)
-        fd_merge, path_merge = tempfile.mkstemp(suffix=f"_MERGED_{base_name}", text=True)
-        os.close(fd_ai)
-        os.close(fd_merge)
-
-        _write_text_preserving(path_ai, ai_text, original_newline=self.original_newline)
-        _write_text_preserving(path_merge, self.original_text, original_newline=self.original_newline)
-        try:
-            from combinecopy.mobile.env import find_meld
-            meld_exe = find_meld()
-            if not meld_exe:
-                self.notify("Meld not found! Please install Meld and add it to PATH.", severity="error")
-                return
-
-            self.notify("Launching Meld... Center panel is the target output. Save and close when done.", severity="info")
-            process = await asyncio.create_subprocess_exec(meld_exe, path_ai, path_merge, self.temp_human_path)
-            await process.wait()
-
-            final_text = safe_read_file(path_merge)
-
-            _write_text_preserving(self.full_path, final_text, original_newline=self.original_newline)
-            
-            old_lines = self.original_text.splitlines(keepends=True)
-            new_lines = final_text.splitlines(keepends=True)
-            diff = list(difflib.unified_diff(old_lines, new_lines, n=0))
-            added = sum(1 for line in diff if line.startswith('+') and not line.startswith('+++'))
-            removed = sum(1 for line in diff if line.startswith('-') and not line.startswith('---'))
-            self.file_obj["_added"] = added
-            self.file_obj["_removed"] = removed
-            
-            self.dismiss(True)
-
-        except Exception as e:
-            self.notify(f"Failed to run Meld: {e}", severity="error")
-        finally:
-            for p in [path_ai, path_merge]:
-                try: os.remove(p)
-                except: pass
-
-    def action_reveal_solution(self) -> None:
-        log = self.query_one("#rehab-solution", RichLog)
-        msg = self.query_one("#rehab-hidden-msg", Label)
-        if log.styles.display == "none":
-            log.styles.display = "block"
-            msg.styles.display = "none"
-            if not self._solution_loaded:
-                action = self.file_obj.get("action", "modify").upper()
-                if action == "CREATE":
-                    log.write(self.file_obj.get("content", ""))
-                else:
-                    for i, b in enumerate(self.file_obj.get("search_replace", [])):
-                        log.write(f"--- BLOCK {i+1} REPLACEMENT ---")
-                        log.write(b.get("replace", ""))
-                self._solution_loaded = True
-        else:
-            log.styles.display = "none"
-            msg.styles.display = "block"
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        btn_id = event.button.id
-        if btn_id == "btn-editor":
-            self.action_open_editor()
-        elif btn_id == "btn-meld":
-            self.action_verify_meld()
-        elif btn_id == "btn-reveal":
-            self.action_reveal_solution()
-        elif btn_id == "btn-hint":
-            self.action_show_hint()
-        elif btn_id == "btn-cancel":
-            self.action_cancel()
+from rich.markup import escape
+from combinecopy.rehab_core import (
+    QUIZ_LEVELS,
+    accept_attempts,
+    apply_blanks,
+    check_blanks,
+    collect_lessons,
+    count_open_blanks,
+    effective_level,
+    fill_blanks,
+    normalize_level,
+    normalize_payload,
+    open_blanks_for,
+    record_quiz_results,
+    reveal_next_rung,
+)
+from combinecopy.tui.quiz import QuizScreen
 
 class CommandExecutionScreen(ModalScreen[bool]):
     CSS = """
@@ -1221,7 +961,10 @@ class AutoAgentApp(App):
         Binding("v", "paste_buffer", "Paste Payload"),
         Binding("V", "paste_editor", "Paste via Editor"),
         Binding("a", "apply_file", "Apply File"),
-        Binding("t", "practice", "Practice (Rehab)"),
+        Binding("t", "rehab", "Rehab Quiz"),
+        Binding("n", "blank_hint", "Next Hint", show=False),
+        Binding("k", "blank_check", "Check Blank", show=False),
+        Binding("g", "blank_fill", "Fill Blank", show=False),
         Binding("p", "partial_add", "Partial Add"),
         Binding("A", "apply_all", "Apply All"),
         Binding("c", "commit", "Commit"),
@@ -1234,7 +977,7 @@ class AutoAgentApp(App):
         Binding("f", "fix_json", "Fix JSON"),
     ]
     TITLE = "CombineCopy — Auto Agent Listener"
-    def __init__(self, root_dir: str, known_files: list[str] | None = None, revert_mode: bool = False, ignore_initial_clipboard: bool = False, web_mode: bool = False, tfs_mode: bool = False, xml_mode: bool = False, consult_mode: bool = False, rehab_mode: bool = False, mobile_mode: bool = False, inbox=None, consult_transport: str = "clipboard", consult_answer_budget: int = 250):
+    def __init__(self, root_dir: str, known_files: list[str] | None = None, revert_mode: bool = False, ignore_initial_clipboard: bool = False, web_mode: bool = False, tfs_mode: bool = False, xml_mode: bool = False, consult_mode: bool = False, rehab_mode=False, rehab_journal: bool = False, mobile_mode: bool = False, inbox=None, consult_transport: str = "clipboard", consult_answer_budget: int = 250):
         super().__init__()
         self.root_dir = root_dir
         self.known_files = known_files or []
@@ -1246,7 +989,12 @@ class AutoAgentApp(App):
         self.tfs_mode = tfs_mode
         self.xml_mode = xml_mode
         self.consult_mode = consult_mode
-        self.rehab_mode = rehab_mode
+        self.rehab_level = normalize_level(rehab_mode)
+        self.rehab_mode = bool(self.rehab_level)
+        self.rehab_journal = bool(rehab_journal)
+        self._commit_armed = False
+        self._quit_armed = False
+        self._blank_keep_armed = None
         self.is_consulting = False
         self.consult_transport = consult_transport
         self.consult_answer_budget = consult_answer_budget
@@ -1267,7 +1015,7 @@ class AutoAgentApp(App):
         if self.tfs_mode:
             self.title = "CombineCopy — Auto Agent Listener (TFS MODE)"
         if self.rehab_mode:
-            self.title = "CombineCopy — Auto Agent Listener (REHAB MODE)"
+            self.title = f"CombineCopy — Auto Agent Listener (REHAB: {self.rehab_level.upper()})"
         if self.mobile_mode:
             self.title = "CombineCopy — Mobile Listener"
 
@@ -1332,7 +1080,7 @@ class AutoAgentApp(App):
                     yield Button("Fix JSON (f)", id="btn-fix-json", variant="warning", disabled=True)
                 with Horizontal(classes="action-row", id="file-action-bar"):
                     yield Button("Apply File (a)", id="btn-apply-file", variant="success", disabled=True)
-                    yield Button("Practice (t)", id="btn-practice", variant="primary", disabled=True)
+                    yield Button("Rehab (t)", id="btn-practice", variant="primary", disabled=True)
                     yield Button("Partial Add (p)", id="btn-partial-add", variant="warning", disabled=True)
                     yield Button("Discard File (d)", id="btn-discard-file", variant="error", disabled=True)
                     yield Button("Human Correct (h)", id="btn-human-correct", variant="warning", disabled=True)
@@ -1580,6 +1328,8 @@ class AutoAgentApp(App):
                         elif "content" in file_obj:
                             file_obj["_revert_error"] = "Cannot revert a full file overwrite without original content."
             
+            normalize_payload(data, effective_level(self.rehab_level, self.revert_mode, self.web_mode))
+
             def status_cb(msg):
                 def update_lbl():
                     try:
@@ -1669,6 +1419,8 @@ class AutoAgentApp(App):
                 warn_marker += " [yellow](Human Corrected)[/yellow]"
             if any("Meld edited" in w for w in warnings):
                 warn_marker += " [yellow](Meld Edited)[/yellow]"
+            if file_obj.get("_rehab_open"):
+                warn_marker += f" [magenta]({file_obj['_rehab_open']} blank(s) open)[/magenta]"
             label_text = f"[{color}]{action}[/{color}] {path_text}{err_marker}{warn_marker}{status_marker}"
             unique_id = f"file-{idx}-{time.time_ns()}"
             item = ListItem(Label(label_text, classes=style), id=unique_id)
@@ -1697,7 +1449,7 @@ class AutoAgentApp(App):
             self.query_one("#btn-apply-file", Button).disabled = not is_pending
             
             if self.query("Button#btn-practice"):
-                self.query_one("#btn-practice", Button).disabled = not is_pending or action == "COMMAND"
+                self.query_one("#btn-practice", Button).disabled = not self._has_rehab_work(selected_file)
                 
             if action == "COMMAND":
                 if self.query("Button#btn-partial-add"):
@@ -1765,6 +1517,9 @@ class AutoAgentApp(App):
             except Exception:
                 old_text = "[Error reading existing file]\n"
         new_text = compute_new_text(file_obj, old_text)
+        if self.rehab_level == "cloze" and not self.web_mode and file_obj.get("_status") == "pending":
+            # Preview the change exactly as it will land, with the blanks swapped out.
+            new_text, _ = apply_blanks(new_text, file_obj, path)
         diff_view = self.query_one("#diff-view", RichLog)
         diff_view.clear()
         
@@ -1787,6 +1542,7 @@ class AutoAgentApp(App):
         if header_text:
             style = "bold red" if errors else "bold yellow"
             diff_view.write(Text(header_text, style=style))
+        self._write_lessons(diff_view, file_obj)
         if old_text == new_text:
             diff_view.write(Text("No changes detected.", style="dim"))
             return
@@ -1808,18 +1564,20 @@ class AutoAgentApp(App):
         has_applied = any(f.get("_status") == "applied" for f in files)
         if not has_pending and not has_applied:
             self.reset_state()
-    def action_practice(self) -> None:
-        btn = self.query_one("#btn-practice", Button)
-        if not btn.disabled:
-            file_list = self.query_one("#file-list", ListView)
-            if file_list.index is not None:
-                file_obj = self.payload["files"][file_list.index]
-                full_path = os.path.join(self.root_dir, file_obj["path"])
-                old_text = safe_read_file(full_path) if os.path.exists(full_path) else ""
-                self.app.push_screen(
-                    RehabScreen(file_obj, self.root_dir, old_text),
-                    callback=lambda success: self.on_rehab_done(file_list.index, success)
-                )
+    def action_rehab(self) -> None:
+        idx, file_obj = self._selected_file()
+        if file_obj is None:
+            return
+        if file_obj.get("_rehab_open"):
+            self._show_blank_status(file_obj)
+        if file_obj.get("quiz"):
+            if file_obj.get("_status") != "applied":
+                self.notify("Apply the file first. Its quiz runs right after it lands.", severity="information")
+                return
+            self._maybe_quiz(idx, force=True)
+            return
+        if not file_obj.get("_rehab_open"):
+            self.notify("This file has no rehab quiz or open blanks.", severity="information")
 
     def action_apply_file(self) -> None:
         btn = self.query_one("#btn-apply-file", Button)
@@ -1832,31 +1590,25 @@ class AutoAgentApp(App):
                         CommandExecutionScreen(file_obj.get("command", ""), self.root_dir),
                         callback=lambda success: self.on_command_done(file_list.index, success)
                     )
-                elif getattr(self, 'rehab_mode', False):
-                    full_path = os.path.join(self.root_dir, file_obj["path"])
-                    old_text = safe_read_file(full_path) if os.path.exists(full_path) else ""
-                    self.app.push_screen(
-                        RehabScreen(file_obj, self.root_dir, old_text),
-                        callback=lambda success: self.on_rehab_done(file_list.index, success)
-                    )
                 elif self.web_mode:
                     self.app.push_screen(MacroScreen(self.payload, [file_list.index]), self.on_macro_done)
                 else:
-                    self._apply_single_file(file_list.index)
-                    self.refresh_file_list()
+                    idx = file_list.index
+                    self._apply_single_file(idx)
+                    self._after_apply(idx)
     def on_command_done(self, idx: int, success: bool) -> None:
         self.payload["files"][idx]["_status"] = "applied"
         self._record_applied_file(self.payload["files"][idx])
         self.refresh_file_list()
         self._check_auto_reset()
 
-    def on_rehab_done(self, idx: int, success: bool) -> None:
-        if success:
-            file_obj = self.payload["files"][idx]
-            file_obj["_status"] = "applied"
-            self._record_applied_file(file_obj)
-            self.refresh_file_list()
-            self._check_auto_reset()
+    def _on_quiz_done(self, file_obj: dict, results, finish) -> None:
+        correct, answered, total = record_quiz_results(results or [], file_obj.get("path", ""), enabled=self.rehab_journal)
+        if total:
+            skipped = total - answered
+            tail = f", {skipped} skipped" if skipped else ""
+            self.notify(f"Quiz: {correct}/{total} correct{tail}.", title="Rehab")
+        finish()
 
     def action_partial_add(self) -> None:
         btn = self.query_one("#btn-partial-add", Button)
@@ -1888,6 +1640,7 @@ class AutoAgentApp(App):
         self._apply_single_file(file_idx)
         self.refresh_file_list()
         self._check_auto_reset()
+        self._after_apply(file_idx)
 
     def action_discard_file(self) -> None:
         btn = self.query_one("#btn-discard-file", Button)
@@ -1919,18 +1672,10 @@ class AutoAgentApp(App):
                 CommandExecutionScreen(file_obj.get("command", ""), self.root_dir),
                 callback=lambda success: self._on_apply_all_command_done(idx, success, indices)
             )
-        elif getattr(self, 'rehab_mode', False):
-            full_path = os.path.join(self.root_dir, file_obj["path"])
-            old_text = safe_read_file(full_path) if os.path.exists(full_path) else ""
-            def callback(success):
-                if success:
-                    self.payload["files"][idx]["_status"] = "applied"
-                    self._record_applied_file(self.payload["files"][idx])
-                self._apply_next_pending(indices)
-            self.app.push_screen(RehabScreen(file_obj, self.root_dir, old_text), callback=callback)
         else:
             self._apply_single_file(idx)
-            self._apply_next_pending(indices)
+            # The next file is only applied once this one's quiz has closed.
+            self._after_apply(idx, on_done=lambda: self._apply_next_pending(indices))
 
     def _on_apply_all_command_done(self, idx: int, success: bool, remaining_indices: list[int]) -> None:
         self.payload["files"][idx]["_status"] = "applied"
@@ -1956,9 +1701,10 @@ class AutoAgentApp(App):
 
     def action_commit(self) -> None:
         btn = self.query_one("#btn-commit", Button)
-        if not btn.disabled:
-            self.commit_changes()
-            self.reset_state()
+        if btn.disabled or not self._confirm_open_blanks():
+            return
+        self.commit_changes()
+        self.reset_state()
 
     def action_human_correct(self) -> None:
         file_list = self.query_one("#file-list", ListView)
@@ -2195,7 +1941,7 @@ class AutoAgentApp(App):
         elif btn_id == "btn-apply-file":
             self.action_apply_file()
         elif btn_id == "btn-practice":
-            self.action_practice()
+            self.action_rehab()
         elif btn_id == "btn-partial-add":
             self.action_partial_add()
         elif btn_id == "btn-commit":
@@ -2231,7 +1977,8 @@ class AutoAgentApp(App):
         if action == "create":
             # Use newline="" to prevent automatic \n -> \r\n translation on Windows.
             # The AI's JSON content uses \n; write it as-is so emojis and exact bytes survive.
-            _write_text_preserving(full_path, file_obj.get("content", ""), original_newline="\n")
+            content = self._prepare_rehab_text(file_obj, path, "", file_obj.get("content", ""))
+            _write_text_preserving(full_path, content, original_newline="\n")
         elif action == "modify":
             # TFS server workspace: checkout before editing
             if self.tfs_mode and os.path.exists(full_path):
@@ -2245,6 +1992,7 @@ class AutoAgentApp(App):
             if os.path.exists(full_path):
                 old_text = safe_read_file(full_path)
             new_text = compute_new_text(file_obj, old_text)
+            new_text = self._prepare_rehab_text(file_obj, path, old_text, new_text)
             old_lines = old_text.splitlines(keepends=True)
             new_lines = new_text.splitlines(keepends=True)
             diff = difflib.unified_diff(old_lines, new_lines, n=0)
@@ -2339,7 +2087,233 @@ class AutoAgentApp(App):
         ]
         self.session_applied_files.append(file_obj)
 
+    # --- rehab ------------------------------------------------------------
+
+    def _selected_file(self):
+        """Returns (index, file_obj) for the highlighted file, or (None, None)."""
+        if not self.payload:
+            return None, None
+        idx = self.query_one("#file-list", ListView).index
+        files = self.payload.get("files", [])
+        if idx is None or not 0 <= idx < len(files):
+            return None, None
+        return idx, files[idx]
+
+    def _prepare_rehab_text(self, file_obj: dict, path: str, old_text: str, new_text: str) -> str:
+        """Opens any cloze blanks, and keeps a snapshot of the change for the quiz."""
+        final_text = new_text
+        if self.rehab_level == "cloze" and not self.web_mode:
+            final_text, notes = apply_blanks(new_text, file_obj, path, root_dir=self.root_dir)
+            for note in notes:
+                self.notify(escape(note), title="Rehab", timeout=10)
+            file_obj["_rehab_open"] = len(open_blanks_for(self.root_dir, path))
+        file_obj["_rehab_old"] = old_text
+        file_obj["_rehab_new"] = final_text
+        return final_text
+
+    def _write_lessons(self, diff_view: RichLog, file_obj: dict) -> None:
+        lessons = collect_lessons(file_obj)
+        for title, lines in lessons:
+            diff_view.write(Text(f"LESSON  {title}", style="bold magenta"))
+            for line in lines:
+                diff_view.write(Text(f"    {line}", style="magenta"))
+        if lessons:
+            diff_view.write(Text("=" * 60 + "\n", style="dim magenta"))
+
+    def _has_rehab_work(self, file_obj: dict) -> bool:
+        if file_obj.get("_rehab_open"):
+            return True
+        return bool(file_obj.get("quiz")) and file_obj.get("_status") == "applied"
+
+    def _after_apply(self, idx: int, on_done=None) -> None:
+        """Runs the rehab steps that follow a file landing, then calls on_done."""
+        self.refresh_file_list()
+        if self.payload and 0 <= idx < len(self.payload.get("files", [])):
+            file_obj = self.payload["files"][idx]
+            if file_obj.get("_rehab_open"):
+                self._show_blank_status(file_obj)
+        self._maybe_quiz(idx, on_done=on_done)
+
+    def _maybe_quiz(self, idx: int, on_done=None, force: bool = False) -> None:
+        def finish():
+            if on_done is not None:
+                on_done()
+
+        files = self.payload.get("files", []) if self.payload else []
+        if not 0 <= idx < len(files):
+            finish()
+            return
+        file_obj = files[idx]
+        questions = file_obj.get("quiz") or []
+        due = force or (self.rehab_level in QUIZ_LEVELS and not file_obj.get("_quiz_done"))
+        if not questions or not due or file_obj.get("_status") != "applied":
+            finish()
+            return
+        file_obj["_quiz_done"] = True
+        screen = QuizScreen(
+            file_obj.get("path", ""),
+            questions,
+            file_obj.get("_rehab_old", ""),
+            file_obj.get("_rehab_new", ""),
+        )
+        self.app.push_screen(screen, callback=lambda results: self._on_quiz_done(file_obj, results, finish))
+
+    def _sync_blanks(self, file_obj: dict) -> None:
+        path = file_obj.get("path")
+        if path:
+            file_obj["_rehab_open"] = len(open_blanks_for(self.root_dir, path))
+        self.refresh_file_list()
+
+    def _show_blank_status(self, file_obj: dict) -> None:
+        path = file_obj.get("path") or ""
+        blanks = open_blanks_for(self.root_dir, path)
+        if not blanks:
+            return
+        lines = [
+            f"### Rehab blanks in `{path}`",
+            "",
+            "Write the missing line(s) between each `TODO(rehab-N)` and `END(rehab-N)` marker in your editor, save, then:",
+            "",
+            "- **k** checks your attempt",
+            "- **n** reveals the next hint",
+            "- **g** fills in the AI version",
+            "",
+        ]
+        for blank in blanks:
+            free = blank.get("free_rungs", 0)
+            used = max(0, blank.get("rungs", 0) - free)
+            total = max(0, len(blank.get("ladder", [])) - free)
+            concept = blank.get("concept") or "open"
+            lines.append(f"- `rehab-{blank['id']}`: {concept} (extra hints used: {used}/{total})")
+        self.query_one("#ai-markdown", Markdown).update("\n".join(lines))
+
+    def _blank_target(self):
+        _, file_obj = self._selected_file()
+        if file_obj is None or not file_obj.get("path"):
+            self.notify("Select a file with open rehab blanks first.", severity="warning")
+            return None
+        return file_obj
+
+    def action_blank_hint(self) -> None:
+        file_obj = self._blank_target()
+        if file_obj is None:
+            return
+        hint = reveal_next_rung(self.root_dir, file_obj["path"])
+        if hint.get("error"):
+            self.notify(hint["error"], severity="warning")
+            return
+        if hint.get("exhausted"):
+            self.notify(f"No more hints for rehab-{hint['id']}. Press g to fill in the AI version.", severity="warning")
+            return
+        message = f"**Hint {hint['rung']}/{hint['total']} for rehab-{hint['id']}:** {hint['text']}"
+        self.query_one("#ai-markdown", Markdown).update(message)
+        self.notify(escape(hint["text"]), title=f"Hint {hint['rung']}/{hint['total']}", timeout=12)
+
+    def action_blank_check(self) -> None:
+        file_obj = self._blank_target()
+        if file_obj is None:
+            return
+        path = file_obj["path"]
+        results = check_blanks(self.root_dir, path, journal=self.rehab_journal)
+        if not results:
+            self.notify("This file has no open rehab blanks.", severity="information")
+            return
+        mismatched = [result["id"] for result in results if result["status"] == "mismatch"]
+        if mismatched and self._blank_keep_armed == path:
+            accept_attempts(self.root_dir, path, mismatched, journal=self.rehab_journal)
+            self.notify(f"Kept your version for {len(mismatched)} blank(s).", title="Rehab")
+            mismatched = []
+        self._blank_keep_armed = path if mismatched else None
+        self._sync_blanks(file_obj)
+        self._report_check(results, mismatched)
+
+    def _report_check(self, results: list, mismatched: list) -> None:
+        for result in results:
+            label = f"rehab-{result['id']}"
+            status = result["status"]
+            if status == "solved":
+                self.notify(f"{label} solved. Your code stays.", title="Rehab")
+            elif status == "empty":
+                self.notify(f"{label} is still empty. Write it between its TODO and END markers.", severity="warning")
+            elif status == "missing":
+                self.notify(f"The markers for {label} are gone. Press g to drop it.", severity="warning")
+            elif status == "error":
+                self.notify(escape(f"Could not update the file for {label}: {result.get('error', '')}"), severity="error")
+        if mismatched:
+            names = ", ".join(f"rehab-{blank_id}" for blank_id in mismatched)
+            self.notify(
+                f"{names}: not quite. Press n for a hint, k again to keep your version anyway, or g to take the AI version.",
+                severity="warning",
+                timeout=12,
+            )
+
+    def action_blank_fill(self) -> None:
+        file_obj = self._blank_target()
+        if file_obj is None:
+            return
+        results = fill_blanks(self.root_dir, file_obj["path"], journal=self.rehab_journal)
+        if not results:
+            self.notify("This file has no open rehab blanks.", severity="information")
+            return
+        self._blank_keep_armed = None
+        self._sync_blanks(file_obj)
+        diff_view = self.query_one("#diff-view", RichLog)
+        diff_view.clear()
+        for result in results:
+            label = f"rehab-{result['id']}"
+            if result["status"] == "revealed":
+                diff_view.write(Text(f"{label}: your attempt vs the AI version", style="bold magenta"))
+                render_word_diff(result["attempt"], result["answer"], diff_view)
+                diff_view.write(Text(""))
+            elif result["status"] == "lost":
+                diff_view.write(Text(f"{label}: its markers were gone, so it was dropped.", style="yellow"))
+            elif result["status"] == "error":
+                diff_view.write(Text(f"{label}: {result.get('error', '')}", style="bold red"))
+        self.notify("Filled the open blanks with the AI version.", title="Rehab")
+
+    def _applied_paths(self) -> list:
+        files = self.payload.get("files", []) if self.payload else []
+        return [f.get("path") for f in files if f.get("_status") == "applied" and f.get("path")]
+
+    def _confirm_open_blanks(self) -> bool:
+        """Never commits stubs: a first press warns, a second fills them in."""
+        paths = self._applied_paths()
+        count = count_open_blanks(self.root_dir, paths)
+        if not count:
+            self._commit_armed = False
+            return True
+        if not self._commit_armed:
+            self._commit_armed = True
+            self.notify(
+                f"{count} rehab blank(s) are still open. Press c again to fill them with the AI version and commit.",
+                severity="warning",
+                timeout=10,
+            )
+            return False
+        self._commit_armed = False
+        for path in paths:
+            fill_blanks(self.root_dir, path, journal=self.rehab_journal)
+        return True
+
+    def _should_hold_quit(self) -> bool:
+        if self._quit_armed:
+            return False
+        paths = [f.get("path") for f in getattr(self, "session_applied_files", []) if f.get("path")]
+        count = count_open_blanks(self.root_dir, paths)
+        if not count:
+            return False
+        self._quit_armed = True
+        self.notify(
+            f"{count} rehab blank(s) are still open in your files. Press Esc again to quit and finish them later "
+            "with combineCopy --rehab-review, or select the file and press g to fill them.",
+            severity="warning",
+            timeout=12,
+        )
+        return True
+
     def action_quit(self) -> None:
+        if self._should_hold_quit():
+            return
         applied = getattr(self, "session_applied_files", [])
         if applied:
             summary_data = {
