@@ -110,7 +110,7 @@ combineCopy --tfs on -f cs # explicitly on, even if the setting says otherwise
 The `off` word is only consumed when it appears on its own immediately after the flag, so `combineCopy --xml src/main.py` still treats the path as a path.
 
 > [!NOTE]
-> The one-shot flags `--system-only`, `--mobile-doctor`, `--install-url-opener` and `--force` have no paired off switch, since they have no saved default to override.
+> The one-shot flags `--system-only`, `--mobile-doctor`, `--install-url-opener`, `--rehab-review` and `--force` have no paired off switch, since they have no saved default to override.
 
 ### Path Targets
 
@@ -147,7 +147,10 @@ The `off` word is only consumed when it appears on its own immediately after the
 | Option | Description | Default | Alias |
 | :--- | :--- | :--- | :--- |
 | `--apply` | Run the apply listener, monitoring the clipboard for execution payloads. | false | -a, --auto |
-| `--rehab` | Enable Active Learning mode. Forces the AI to emit plain-English instructions and hints, hiding the code until you practice writing it yourself. | false | none |
+| `--rehab` | Enable Rehab Mode. The AI's code lands as normal, with lessons, quizzes or blanks added on top depending on the level. | false | none |
+| `--rehab-level <level>` | Rehab method for this run: `explain`, `quiz` or `cloze`. Implies `--rehab`. | quiz | none |
+| `--rehab-journal` | Record quiz answers and blank outcomes to `~/.cc_rehab/journal.jsonl`. | false | none |
+| `--rehab-review` | Finish open blanks, retake missed quiz questions and list weak concepts, then exit. | false | none |
 | `--divide` | Enable Large Task Mode. Splits a sweeping request into sub-tasks tracked in `.cc_tasks.json`. | false | none |
 | `--revert` | Run the apply listener, but reverse all incoming modifications. | false | -r |
 | `--cli` | Enable CLI Mode, allowing the LLM to output terminal commands in its payload. | false | none |
@@ -253,16 +256,27 @@ It monitors your clipboard in the background. When it catches a valid JSON or XM
 
 ### Rehab Mode (Active Learning)
 
-Relying entirely on AI agents to write code can cause your "muscle memory" and problem-solving skills to atrophy. Rehab Mode combats this.
+Relying entirely on AI agents to write code can let your problem-solving skills atrophy. Rehab Mode keeps you engaged with every change without slowing delivery down. The AI's code always lands, and Rehab adds a small teaching layer that rides along in the same payload, with no extra prompts and no extra round trips.
 
-When running in Rehab Mode, the AI explains the *logical intent* behind its modifications in plain English, but the actual code is initially hidden from you.
+Pick how much teaching you want with `rehab_level` in the settings, or `--rehab-level` for one run. Each level includes the ones above it.
 
-1. The tool presents the plain-English instructions and hints to you.
-2. You press a button to open your local editor and attempt to write the code yourself based on the instructions.
-3. You press another button to open Meld, which compares your handwritten code against the AI's intended code.
-4. Once you verify or correct your code, you apply the change.
+| Level | What you get |
+| :--- | :--- |
+| `explain` | A short lesson (concept, why, watch out) on every block that carries an idea, shown above its hunk in the diff view. |
+| `quiz` (default) | Lessons, plus up to three multiple-choice "what happens if..." questions. Each quiz runs right after its file is applied, with that file's change on screen beside it. |
+| `cloze` | Lessons and quiz, plus up to three key lines blanked out. The change is applied with those lines swapped for `TODO(rehab-N)` / `END(rehab-N)` markers, and you write the missing code between them in your own editor. |
 
-If you get stuck, you can reveal hints progressively or fully reveal the AI's exact code. You can launch Rehab mode globally with the `--rehab` flag to force the AI to write instructions, or you can invoke it on-the-fly in the standard agent listener by selecting a pending file and pressing `t` (Practice).
+At the cloze level the listener gives you three keys:
+
+- `n` reveals the next hint (the intent, then the approach, then pseudocode).
+- `k` checks your attempt against the AI's lines.
+- `g` gives up and fills them in.
+
+Committing with blanks still open offers to fill them first, so stubs are never committed by accident. Blanks you leave open are kept in `.cc_rehab_pending.json` and can be finished later with `combineCopy --rehab-review`.
+
+Turn on `rehab_journal` to log quiz answers and blank outcomes to `~/.cc_rehab/journal.jsonl`. The journal is off by default. With it on, `combineCopy --rehab-review` re-asks the questions you missed and lists the concepts you most often needed help with.
+
+See [Learning from every change](docs/usecases/04-rehab-mode.md) for the full walkthrough.
 
 ### External LLM Consult
 
@@ -310,6 +324,8 @@ When any setting differs from its built-in default, a dim one-line banner names 
 | `consult_transport` | `clipboard` / `file` / `both` | `clipboard` | How consult questions and answers cross to the external model |
 | `consult_answer_budget` | number | 250 | Per-answer word budget requested from the external model |
 | `rehab` | on/off | off | Enable Rehab (active learning) mode |
+| `rehab_level` | `explain` / `quiz` / `cloze` | `quiz` | How much teaching Rehab adds to each change |
+| `rehab_journal` | on/off | off | Log rehab results for `--rehab-review` |
 | `divide` | on/off | off | Enable Large Task Mode |
 | `diff` | on/off | off | Inject the uncommitted git or TFS diff |
 | `file_culling` | on/off | off | Enable AST map generation |
@@ -352,10 +368,14 @@ On launch, the CLI apply listener automatically reads the execution payload curr
 | `e` | Copy validation or JSON syntax error to clipboard |
 | `l` | Reprint the pending files table |
 | `?`, `help` | Show command help |
+| `t` | Rehab: retake the selected file's quiz, or list its open blanks |
+| `n` | Rehab: reveal the next hint for the selected file's open blank |
+| `k` | Rehab: check your attempt at the selected file's open blanks |
+| `g` | Rehab: fill the selected file's open blanks with the AI version |
 | `q` | Quit the apply session (always returns summary) |
 
 > [!NOTE]
-> Advanced modal features like Partial Add (`p`) and Active Learning practice (`t`) are exclusive to the full TUI. Human Correct (`h`) works in both, through an interactive hunk adjuster in the CLI.
+> Partial Add (`p`) is exclusive to the full TUI. Human Correct (`h`) works in both, through an interactive hunk adjuster in the CLI. Every Rehab key (`t`, `n`, `k`, `g`) works in both, and during a CLI quiz `v` shows the change again.
 
 ### Command Chaining
 

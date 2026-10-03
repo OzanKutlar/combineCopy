@@ -1,89 +1,104 @@
-# Practising Instead of Pasting
+# Learning From Every Change
 
-> Flags: `--rehab`, and the `t` key in the apply listener
+> Flags: `--rehab`, `--rehab-level`, `--rehab-journal`, `--rehab-review`, and the `t` `n` `k` `g` keys in the apply listener
 
 ## The situation
 
-You have noticed something uncomfortable. You can still read code fluently, but when you sit down to write a non-trivial refactor from scratch, you reach for the model before you reach for the keyboard. The muscle memory is going.
+You can still read code fluently, but when you sit down to write a non-trivial change from scratch, you reach for the model before you reach for the keyboard. You do not want to give the model up, and you do not want every change to crawl either. You want to come out of each one understanding it.
 
-Rehab Mode is the deliberate fix. The model still works out what needs to change and why, but it hands you the *intent* in plain English and hides the code until you have attempted it yourself.
+Rehab Mode never stands between the model's code and your files. The code lands exactly as it would without it. What Rehab adds is a small teaching layer that rides in the same EXECUTION payload, so there are no extra prompts and no extra round trips.
 
 ---
 
-## 1. Launch in rehab mode
+## 1. Pick a level
+
+| Level | What rides along with the code | What it costs you |
+| :--- | :--- | :--- |
+| `explain` | A short lesson on every block that carries an idea | Nothing. Read it or skip it |
+| `quiz` | Lessons, plus up to three questions about the change, asked right after the file lands | About thirty seconds per payload |
+| `cloze` | Lessons and quiz, plus up to three key lines left for you to write | Only the lines that were blanked |
+
+Each level includes the ones above it, and `quiz` is the default. Set your usual level once with `combineCopy --settings` (turn `rehab` on and pick `rehab_level`), or choose one for a single run:
 
 ```bash
-combineCopy -f py -s --rehab --apply --system
+combineCopy -f py -s --rehab-level cloze --apply --system
 ```
 
-This is the ordinary refactoring combination with `--rehab` added. The system prompt now instructs the model to attach an `instruction` to every change, plus up to three optional hints.
+`--rehab-level` implies `--rehab`. The system prompt only carries the instructions for the level you chose, so the lighter levels cost fewer tokens.
 
-Write your request as normal. Rehab Mode changes the output format, not the conversation.
+## 2. Read the lessons
 
-## 2. Catch the payload and open a change
+Every level starts here. Each block that holds a real idea carries a lesson, printed in magenta above the diff:
 
-When the EXECUTION payload arrives, the listener opens the rehab screen instead of applying directly. The left pane holds the instructions; the right pane is deliberately blank.
+```
+LESSON  Block 1: Lazy evaluation with a generator
+    Why: summarise() walks the rows once, so they never need to sit in memory together.
+    Watch out: A generator is single-pass, so a second loop over rows sees nothing.
+```
 
-![The rehab screen showing plain-English instructions with the solution hidden](../images/usecases/uc4-01-instructions.png)
+The model is told to skip lessons on boilerplate, so imports and renames stay quiet. Apply as normal with `a` or `Shift+A`. Nothing waits for you.
 
-For a modification you get the target code and a description of what should happen to it, phrased as intent rather than implementation:
+## 3. Answer the quiz
 
-> Convert the list comprehension to a generator expression so the whole result set is never held in memory at once.
+At the `quiz` and `cloze` levels, the moment a file with questions is applied, its quiz opens. The change you just applied sits on the left and the question sits on the right.
 
-## 3. Use hints before you use the answer
+| Key | Does |
+| :--- | :--- |
+| `1`-`4` | Answer |
+| Enter | Next question, once you have answered |
+| Esc | Skip the rest of the quiz |
 
-Stuck is fine. Stuck for twenty minutes is not learning, it is just friction. Press `h` to reveal one hint at a time.
+Questions are about the code in front of you: what happens if a guard is removed, if an input is empty, if the function runs twice. You are shown the right answer and a one-line explanation either way. With `Shift+A`, the next file is only applied once the current quiz closes, so every question is asked while its change is fresh.
 
-![A revealed hint appended to the instructions pane](../images/usecases/uc4-02-hint.png)
+In the CLI listener the quiz runs inline after `a` or `A`. Type `v` at any question to print the change again. Press `t` on an applied file to retake its quiz.
 
-Hints are written to nudge rather than to solve, so the first one usually points at the technique rather than the syntax.
+## 4. Write the blanks
 
-## 4. Write it yourself
+At the `cloze` level, the model also marks up to three key lines in its change. The change is applied with those lines swapped for markers:
 
-Press `o` to open your own copy of the file in your editor, positioned at the first block being changed.
+```python
+def load_report(handle):
+    # TODO(rehab-1): Stop holding every parsed row in memory at once.
+    pass  # <- rehab: replace this line
+    # END(rehab-1)
+    return summarise(rows)
+```
 
-![The file open in an editor at the target line](../images/usecases/uc4-03-editor.png)
+The TODO text is the first hint. In Python a stand-in `pass` keeps the file importable while you work. Open the file in your own editor, replace the stand-in with your version, save, and come back to the listener with the file selected:
 
-This is a scratch copy, not your real file. Nothing you do here touches the repository until you explicitly verify. Write the change as you think it should be, save, and close.
+| Key | Does |
+| :--- | :--- |
+| `k` | Check your attempt. A match removes the markers and keeps your code. If it differs, you can keep your version anyway, since there is usually more than one right answer |
+| `n` | Reveal the next hint: the approach, then pseudocode |
+| `g` | Fill in the AI version, shown as a diff against what you wrote |
 
-## 5. Verify against the model
+> [!IMPORTANT]
+> Stubs are never committed by accident. Committing with blanks still open asks first, and fills them with the AI version before the commit goes through.
 
-Press `m` to open Meld with three panes: the model's version, the merge target in the middle, and your handwritten version.
+Blanks you leave open survive the session in `.cc_rehab_pending.json` in your repository root. Run `combineCopy --rehab-review` later to check them or fill them all at once.
 
-![Meld comparing your version against the AI version](../images/usecases/uc4-04-meld-verify.png)
+## 5. Keep a journal
 
-The centre pane is what actually gets written. That framing matters, because it means the outcome is not a pass or fail grade. If you got it right, the panes agree and you save. If you took a different but equally valid route, you can keep yours. If you missed something, you can pull the model's line across.
+Turn `rehab_journal` on in the settings, or pass `--rehab-journal`, and every quiz answer and blank outcome is appended to `~/.cc_rehab/journal.jsonl`. The journal is off by default.
 
-Save the centre pane and close Meld. The file is written and the change is marked as applied.
+```bash
+combineCopy --rehab-review
+```
 
-## 6. Reveal when you need to
-
-If you want to see the answer, press `r`.
-
-![The revealed AI solution in the right-hand pane](../images/usecases/uc4-05-revealed.png)
-
-Press `r` again to hide it. There is no penalty and nothing is recorded. The hiding exists to make you attempt the change first, not to keep the answer from you.
-
----
-
-## On-the-fly practice
-
-You do not have to commit to a whole session. In an ordinary apply listener run, select any pending file and press `t`.
-
-That opens the same rehab screen for just that one file. This is the more common way to use it in practice: apply the boilerplate normally, and practise the one change that actually contained an idea.
-
-> [!NOTE]
-> Without `--rehab` the model was never asked to write instructions, so a file opened with `t` shows the target code and the change but no plain-English explanation. It still works as a write-it-yourself exercise, just without the coaching.
+With a journal, the review re-asks every question you missed or skipped, using the stored answers and explanations, so it costs no prompts at all. It also lists the concepts you most often needed a hint or a reveal for, which is a good guide to what to practise deliberately.
 
 ---
 
 ## Tips
 
 > [!TIP]
-> Rehab pairs badly with `--divide`. Working through a twelve-task split by hand is a slog. Use it on the single interesting task instead.
-
-> [!WARNING]
-> Meld is required for the verification step. It has no Android build, so this mode is desktop-only in practice.
+> Add `.cc_rehab_pending.json` to your `.gitignore`. It only exists while blanks are open and is never staged by the listener, but it will show up in `git status`.
 
 > [!TIP]
-> If you find the instructions consistently too vague to act on, say so in the conversation. The model will write more detailed intent for subsequent payloads without slipping into writing the code out in prose.
+> `cloze` pairs badly with `--divide`. Use `quiz` across a split, and switch to `cloze` for the one sub-task that actually holds an idea.
+
+> [!NOTE]
+> Web macro mode (`--web-apply`) cannot blank lines in a browser IDE, so `cloze` runs as `quiz` there. `--revert` ignores Rehab entirely.
+
+> [!NOTE]
+> Rehab no longer needs Meld, so every level works on Termux, in the TUI and in the CLI listener alike.
