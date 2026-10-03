@@ -682,7 +682,10 @@ def main():
     # add_toggle derives its off-switch from the dest, so it only produced
     # --no-auto. Register the matching spelling for the canonical flag too.
     parser.add_argument("--no-apply", action="store_false", dest="auto", default=None, help=argparse.SUPPRESS)
-    add_toggle("--rehab", help_text="Enable Rehab Mode to manually type AI suggestions with Meld verification.")
+    add_toggle("--rehab", help_text="Enable Rehab Mode. The AI's code lands as normal, with lessons, quizzes or blanks on top.")
+    parser.add_argument("--rehab-level", choices=("explain", "quiz", "cloze"), default=None, help="Rehab method for this run: explain, quiz or cloze. Implies --rehab.")
+    add_toggle("--rehab-journal", dest="rehab_journal", help_text="Record rehab quiz and blank results to ~/.cc_rehab/journal.jsonl.")
+    parser.add_argument("--rehab-review", action="store_true", help="Finish open rehab blanks and retake missed quiz questions, then exit.")
     add_toggle("-r", "--revert", help_text="Run the apply listener, but reverse all incoming modifications")
     add_toggle("--cli", help_text="Enable CLI Mode. Allows the AI to output terminal commands to be executed.")
     add_toggle("--web", help_text="Launch the local web UI server.")
@@ -740,6 +743,11 @@ def main():
 
     if args.install_url_opener:
         install_url_opener(console, force=args.force)
+        return
+
+    if args.rehab_review:
+        from combinecopy.rehab_cli import run_review
+        run_review(console, os.getcwd(), journal=bool(args.rehab_journal))
         return
 
     if args.file_culling and not (args.system_only or args.json_select):
@@ -848,9 +856,9 @@ def main():
         # accidentally enabled keyboard macro mode. It should track --web-apply,
         # matching the other AutoAgentApp construction site below.
         if getattr(args, 'apply_ui', 'tui') == 'cli':
-            result = run_apply_cli(root_dir, revert_mode=args.revert, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile, chain_mode=args.apply_chain, consult_transport=args.consult_transport, consult_answer_budget=args.consult_answer_budget)
+            result = run_apply_cli(root_dir, revert_mode=args.revert, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, rehab_journal=args.rehab_journal, mobile_mode=args.mobile, chain_mode=args.apply_chain, consult_transport=args.consult_transport, consult_answer_budget=args.consult_answer_budget)
         else:
-            app = AutoAgentApp(root_dir, revert_mode=args.revert, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile, consult_transport=args.consult_transport, consult_answer_budget=args.consult_answer_budget)
+            app = AutoAgentApp(root_dir, revert_mode=args.revert, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, rehab_journal=args.rehab_journal, mobile_mode=args.mobile, consult_transport=args.consult_transport, consult_answer_budget=args.consult_answer_budget)
             result = app.run()
         if isinstance(result, dict) and result.get("type") == "task_division":
             data = result.get("data")
@@ -1264,9 +1272,9 @@ def main():
             phase_name += " [WEB MACRO MODE]"
         console.print(f"\n[bold cyan]Phase: {phase_name}[/bold cyan]")
         if getattr(args, 'apply_ui', 'tui') == 'cli':
-            result = run_apply_cli(root_dir, all_known_files, revert_mode=args.revert, ignore_initial_clipboard=True, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile, chain_mode=args.apply_chain, consult_transport=args.consult_transport, consult_answer_budget=args.consult_answer_budget)
+            result = run_apply_cli(root_dir, all_known_files, revert_mode=args.revert, ignore_initial_clipboard=True, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, rehab_journal=args.rehab_journal, mobile_mode=args.mobile, chain_mode=args.apply_chain, consult_transport=args.consult_transport, consult_answer_budget=args.consult_answer_budget)
         else:
-            app = AutoAgentApp(root_dir, all_known_files, revert_mode=args.revert, ignore_initial_clipboard=True, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, mobile_mode=args.mobile, consult_transport=args.consult_transport, consult_answer_budget=args.consult_answer_budget)
+            app = AutoAgentApp(root_dir, all_known_files, revert_mode=args.revert, ignore_initial_clipboard=True, web_mode=args.web_apply, tfs_mode=args.tfs, xml_mode=args.xml, consult_mode=args.consult, rehab_mode=args.rehab, rehab_journal=args.rehab_journal, mobile_mode=args.mobile, consult_transport=args.consult_transport, consult_answer_budget=args.consult_answer_budget)
             result = app.run()
         if isinstance(result, dict) and result.get("type") == "task_division":
             data = result.get("data")

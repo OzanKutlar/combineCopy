@@ -41,6 +41,22 @@ from combinecopy.mobile.env import find_meld, resolve_editor, run_editor, editor
 from combinecopy.mobile.inbox import read_latest_dropped_file, INBOX_DIR
 from combinecopy.mobile.clipboard import read_text_once
 from combinecopy.consult_core import complete_consultation, extract_consult_payload
+from rich.markup import escape
+from combinecopy.rehab_core import (
+    QUIZ_LEVELS,
+    accept_attempts,
+    apply_blanks,
+    check_blanks,
+    count_open_blanks,
+    effective_level,
+    fill_blanks,
+    normalize_level,
+    normalize_payload,
+    open_blanks_for,
+    record_quiz_results,
+    reveal_next_rung,
+)
+from combinecopy.rehab_cli import ask_quiz_cli, print_lessons
 
 
 class _ConsoleDiffSink:
@@ -57,7 +73,7 @@ class ApplyCliSession:
 
     # Every command that is exactly one character, so a chain can be split on
     # character boundaries once the leading digits have been consumed.
-    _SINGLE_COMMANDS = "vaAdDcmfrehlptq?"
+    _SINGLE_COMMANDS = "vaAdDcmfrehlptq?nkg"
     # Multi-character words that must never be split into their letters.
     _WORD_COMMANDS = ("help", "list", "quit", "exit")
 
@@ -71,7 +87,8 @@ class ApplyCliSession:
         tfs_mode: bool = False,
         xml_mode: bool = False,
         consult_mode: bool = False,
-        rehab_mode: bool = False,
+        rehab_mode=False,
+        rehab_journal: bool = False,
         mobile_mode: bool = False,
         chain_mode: bool = False,
         consult_transport: str = "clipboard",
@@ -86,6 +103,8 @@ class ApplyCliSession:
         self.xml_mode = xml_mode
         self.consult_mode = consult_mode
         self.rehab_mode = rehab_mode
+        self.rehab_level = normalize_level(rehab_mode)
+        self.rehab_journal = bool(rehab_journal)
         self.mobile_mode = mobile_mode
         self.chain_mode = chain_mode
         self.consult_transport = consult_transport
@@ -185,6 +204,7 @@ class ApplyCliSession:
                     elif "content" in file_obj:
                         file_obj["_revert_error"] = "Cannot revert a full file overwrite without original content."
 
+        normalize_payload(data, effective_level(self.rehab_level, self.revert_mode, self.web_mode))
         files_list = data.get("files", [])
         for file_obj in files_list:
             file_obj["_status"] = "pending"
@@ -265,6 +285,10 @@ class ApplyCliSession:
         hints = ["'v' to view diff", "'m' for Meld", "'a' to apply", "'d' to discard"]
         if has_cands:
             hints.append("'h' for Human Correct")
+        if f.get("path") and open_blanks_for(self.root_dir, f["path"]):
+            hints.append("'k'/'n'/'g' for rehab blanks")
+        if f.get("quiz") and f.get("_status") == "applied":
+            hints.append("'t' to retake the quiz")
         console.print(f"[dim]Press {', '.join(hints)}.[/dim]")
 
     def _render_selected_diff(self) -> None:
@@ -286,7 +310,10 @@ class ApplyCliSession:
         old_text = safe_read_file(full_path) if os.path.exists(full_path) else ""
         new_text = compute_new_text(f, old_text)
 
+        if self.rehab_level == "cloze" and not self.web_mode and f.get("_status") == "pending":
+            new_text, _ = apply_blanks(new_text, f, path)
         console.print(Rule(f"[bold blue]Diff for {path}[/bold blue]"))
+        print_lessons(console, f)
         if old_text == new_text:
             console.print("[dim]No changes detected.[/dim]")
             return
@@ -338,7 +365,8 @@ class ApplyCliSession:
 
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
         if action == "create":
-            write_text_preserving(full_path, f.get("content", ""), original_newline="\n")
+            content = self._prepare_rehab_text(f, path, "", f.get("content", ""))
+            write_text_preserving(full_path, content, original_newline="\n")
             f["_status"] = "applied"
             self._record_applied(f)
             console.print(f"[bold green]✓ Created file:[/] {path}")
@@ -355,6 +383,7 @@ class ApplyCliSession:
             old_text = safe_read_file(full_path) if os.path.exists(full_path) else ""
             new_text = compute_new_text(f, old_text)
 
+            new_text = self._prepare_rehab_text(f, path, old_text, new_text)
             diff = list(difflib.unified_diff(old_text.splitlines(keepends=True), new_text.splitlines(keepends=True), n=0))
             added = sum(1 for line in diff if line.startswith('+') and not line.startswith('+++'))
             removed = sum(1 for line in diff if line.startswith('-') and not line.startswith('---'))
@@ -683,6 +712,9 @@ class ApplyCliSession:
             console.print("[yellow]No applied changes to commit.[/yellow]")
             return None
 
+        if not self._settle_open_blanks(paths):
+            return None
+
         if len(applied) < len(files):
             console.print("[yellow]Not all changes have been applied.[/yellow]")
             try:
@@ -752,6 +784,180 @@ class ApplyCliSession:
             f"[dim]{outcome['answered']} of {outcome['total']} answered. "
             f"{outcome['logged']} new answer(s) saved to the consult log.[/dim]"
         )
+
+    # --- rehab ------------------------------------------------------------
+
+    def _prepare_rehab_text(self, f: dict, path: str, old_text: str, new_text: str) -> str:
+        """Opens any cloze blanks, and keeps a snapshot of the change for the quiz."""
+        final_text = new_text
+        if self.rehab_level == "cloze" and not self.web_mode:
+            final_text, notes = apply_blanks(new_text, f, path, root_dir=self.root_dir)
+            for note in notes:
+                console.print(f"[magenta]{escape(note)}[/magenta]")
+        f["_rehab_old"] = old_text
+        f["_rehab_new"] = final_text
+        return final_text
+
+    def _selected_file(self) -> dict | None:
+        if self.selected_idx is None or not self.payload:
+            console.print("[yellow]No file selected. Type a file number first.[/yellow]")
+            return None
+        files = self.payload.get("files", [])
+        if not 0 <= self.selected_idx < len(files):
+            return None
+        return files[self.selected_idx]
+
+    def _show_applied_change(self, f: dict) -> None:
+        old_text = f.get("_rehab_old", "")
+        new_text = f.get("_rehab_new", "")
+        console.print(Rule(f"[bold blue]Change in {escape(f.get('path', ''))}[/bold blue]"))
+        if old_text == new_text:
+            console.print("[dim]No change was recorded for this file.[/dim]")
+            return
+        render_word_diff(old_text, new_text, _ConsoleDiffSink(console))
+
+    def _run_quiz(self, idx: int, force: bool = False) -> None:
+        files = self.payload.get("files", []) if self.payload else []
+        if not 0 <= idx < len(files):
+            return
+        f = files[idx]
+        questions = f.get("quiz") or []
+        due = force or (self.rehab_level in QUIZ_LEVELS and not f.get("_quiz_done"))
+        if not questions or not due or f.get("_status") != "applied":
+            return
+        f["_quiz_done"] = True
+        path = f.get("path", "")
+        console.print(f"\n[bold magenta]Rehab quiz for {escape(path)}[/bold magenta] [dim](type v at any question to see the change)[/dim]")
+        results = ask_quiz_cli(console, questions, show_change=lambda: self._show_applied_change(f))
+        correct, answered, total = record_quiz_results(results, path, enabled=self.rehab_journal)
+        skipped = total - answered
+        tail = f", {skipped} skipped" if skipped else ""
+        console.print(f"[bold magenta]Quiz: {correct}/{total} correct{tail}.[/bold magenta]")
+
+    def _print_blank_status(self, path: str) -> list:
+        blanks = open_blanks_for(self.root_dir, path)
+        if not blanks:
+            return blanks
+        console.print(f"[bold magenta]{len(blanks)} open blank(s) in {escape(path)}.[/bold magenta] Write the missing line(s) between each TODO(rehab-N) and END(rehab-N) marker, then:")
+        console.print("  [cyan]k[/cyan] check  |  [cyan]n[/cyan] next hint  |  [cyan]g[/cyan] fill in the AI version")
+        for blank in blanks:
+            concept = escape(blank.get("concept") or "")
+            console.print(f"  [magenta]rehab-{blank['id']}[/magenta] {concept}")
+        return blanks
+
+    def _handle_rehab(self) -> None:
+        f = self._selected_file()
+        if f is None:
+            return
+        blanks = self._print_blank_status(f["path"]) if f.get("path") else []
+        if f.get("quiz"):
+            if f.get("_status") != "applied":
+                console.print("[yellow]Apply the file first ('a'). Its quiz runs right after it lands.[/yellow]")
+                return
+            self._run_quiz(self.selected_idx, force=True)
+            return
+        if not blanks:
+            console.print("[yellow]This file has no rehab quiz or open blanks.[/yellow]")
+
+    def _blank_path(self) -> str | None:
+        f = self._selected_file()
+        if f is None or not f.get("path"):
+            return None
+        return f["path"]
+
+    def _handle_blank_hint(self) -> None:
+        path = self._blank_path()
+        if path is None:
+            return
+        hint = reveal_next_rung(self.root_dir, path)
+        if hint.get("error"):
+            console.print(f"[yellow]{hint['error']}[/yellow]")
+            return
+        if hint.get("exhausted"):
+            console.print(f"[yellow]No more hints for rehab-{hint['id']}. Press 'g' to fill in the AI version.[/yellow]")
+            return
+        console.print(f"[bold magenta]Hint {hint['rung']}/{hint['total']} for rehab-{hint['id']}:[/bold magenta] {escape(hint['text'])}")
+
+    def _handle_blank_check(self) -> None:
+        path = self._blank_path()
+        if path is None:
+            return
+        results = check_blanks(self.root_dir, path, journal=self.rehab_journal)
+        if not results:
+            console.print("[yellow]This file has no open rehab blanks.[/yellow]")
+            return
+        for result in results:
+            self._print_check_result(result)
+        mismatched = [result["id"] for result in results if result["status"] == "mismatch"]
+        if not mismatched:
+            return
+        try:
+            answer = console.input("[bold]n = next hint, k = keep your version anyway, g = take the AI version, Enter = keep working: [/bold]").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            return
+        if answer == "n":
+            self._handle_blank_hint()
+        elif answer == "k":
+            accept_attempts(self.root_dir, path, mismatched, journal=self.rehab_journal)
+            console.print(f"[green]Kept your version for {len(mismatched)} blank(s).[/green]")
+        elif answer == "g":
+            self._handle_blank_fill(ids=mismatched)
+
+    def _print_check_result(self, result: dict) -> None:
+        label = f"rehab-{result['id']}"
+        status = result["status"]
+        if status == "solved":
+            console.print(f"[bold green]✓ {label} solved.[/bold green] The markers are gone and your code stays.")
+        elif status == "mismatch":
+            console.print(f"[bold red]✗ {label} is not quite right yet.[/bold red]")
+        elif status == "empty":
+            console.print(f"[yellow]{label} is still empty. Write it between its TODO and END markers.[/yellow]")
+        elif status == "missing":
+            console.print(f"[yellow]The markers for {label} are gone. Press 'g' to drop it.[/yellow]")
+        elif status == "error":
+            console.print(f"[bold red]Could not update the file for {label}: {escape(result.get('error', ''))}[/bold red]")
+
+    def _handle_blank_fill(self, ids=None) -> None:
+        path = self._blank_path()
+        if path is None:
+            return
+        results = fill_blanks(self.root_dir, path, ids=ids, journal=self.rehab_journal)
+        if not results:
+            console.print("[yellow]This file has no open rehab blanks.[/yellow]")
+            return
+        for result in results:
+            label = f"rehab-{result['id']}"
+            if result["status"] == "revealed":
+                console.print(Rule(f"[bold magenta]{label}: your attempt vs the AI version[/bold magenta]"))
+                render_word_diff(result["attempt"], result["answer"], _ConsoleDiffSink(console))
+            elif result["status"] == "lost":
+                console.print(f"[yellow]The markers for {label} were gone, so it was dropped.[/yellow]")
+            elif result["status"] == "error":
+                console.print(f"[bold red]Could not update the file for {label}: {escape(result.get('error', ''))}[/bold red]")
+
+    def _settle_open_blanks(self, paths: list) -> bool:
+        """Never commits stubs: open blanks are filled first, or the commit stops."""
+        count = count_open_blanks(self.root_dir, paths)
+        if not count:
+            return True
+        try:
+            answer = console.input(f"[bold yellow]{count} rehab blank(s) are still open. Fill them with the AI version before committing? (Y/n): [/bold yellow]").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[yellow]Commit cancelled.[/yellow]")
+            return False
+        if answer in ("n", "no"):
+            console.print("[yellow]Commit cancelled. Finish the blanks with 'k', or fill them with 'g'.[/yellow]")
+            return False
+        for path in paths:
+            fill_blanks(self.root_dir, path, journal=self.rehab_journal)
+        console.print("[green]Filled the open blanks with the AI version.[/green]")
+        return True
+
+    def _warn_open_blanks(self) -> None:
+        paths = [f.get("path") for f in self.session_applied_files if f.get("path")]
+        count = count_open_blanks(self.root_dir, paths)
+        if count:
+            console.print(f"[yellow]{count} rehab blank(s) are still open in your files. Finish them later with combineCopy --rehab-review.[/yellow]")
 
     def reload_inbound(self, explicit_text: str | None = None) -> None:
         content = explicit_text if explicit_text is not None else self._read_inbound_text()
@@ -836,6 +1042,7 @@ class ApplyCliSession:
             self._print_files_table()
             if not applied:
                 return "stop"
+            self._run_quiz(self.selected_idx)
 
         elif cmd == "A":
             if not self.payload:
@@ -846,6 +1053,8 @@ class ApplyCliSession:
             for i in pending:
                 if not self._apply_file_idx(i):
                     failed = True
+                    continue
+                self._run_quiz(i)
             self._print_files_table()
             if failed:
                 return "stop"
@@ -906,6 +1115,7 @@ class ApplyCliSession:
             self._print_files_table()
 
         elif cmd in ("q", "quit", "exit"):
+            self._warn_open_blanks()
             return "quit"
 
         # NOT IMPLEMENTED: Partial Add
@@ -915,9 +1125,17 @@ class ApplyCliSession:
         elif cmd == "h":
             self._handle_human_correct()
 
-        # NOT IMPLEMENTED: Rehab Mode practice session
         elif cmd == "t":
-            console.print("[yellow]Active Recall practice (t) is only supported in the full TUI. Run without --apply-cli.[/yellow]")
+            self._handle_rehab()
+
+        elif cmd == "n":
+            self._handle_blank_hint()
+
+        elif cmd == "k":
+            self._handle_blank_check()
+
+        elif cmd == "g":
+            self._handle_blank_fill()
 
         else:
             console.print(f"[yellow]Unknown command '{cmd}'. Type '?' for help.[/yellow]")
@@ -985,6 +1203,10 @@ class ApplyCliSession:
         console.print("  [cyan]r[/cyan]            Reload inbound payload from clipboard / inbox")
         console.print("  [cyan]e[/cyan]            Copy validation or JSON error to clipboard")
         console.print("  [cyan]l[/cyan]            Reprint the file status table")
+        console.print("  [cyan]t[/cyan]            Rehab: retake the selected file's quiz, or list its open blanks")
+        console.print("  [cyan]n[/cyan]            Rehab: next hint for the selected file's open blank")
+        console.print("  [cyan]k[/cyan]            Rehab: check your attempt at the selected file's blanks")
+        console.print("  [cyan]g[/cyan]            Rehab: fill the selected file's blanks with the AI version")
         console.print("  [cyan]q[/cyan]            Quit session and show summary")
         if self.chain_mode:
             console.print(Rule("[bold blue]Chaining[/bold blue]"))
@@ -1005,7 +1227,8 @@ def run_apply_cli(
     tfs_mode: bool = False,
     xml_mode: bool = False,
     consult_mode: bool = False,
-    rehab_mode: bool = False,
+    rehab_mode=False,
+    rehab_journal: bool = False,
     mobile_mode: bool = False,
     chain_mode: bool = False,
     consult_transport: str = "clipboard",
@@ -1022,6 +1245,7 @@ def run_apply_cli(
         xml_mode=xml_mode,
         consult_mode=consult_mode,
         rehab_mode=rehab_mode,
+        rehab_journal=rehab_journal,
         mobile_mode=mobile_mode,
         chain_mode=chain_mode,
         consult_transport=consult_transport,
