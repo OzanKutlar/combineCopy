@@ -29,6 +29,8 @@ DEFAULTS = {
     'consult_transport': ('choice', 'clipboard', 'How consult text crosses to the external model: clipboard, file or both'),
     'consult_answer_budget': ('int', 250, 'Per-answer word budget requested from the external model'),
     'rehab': ('bool', False, 'Enable Rehab (active learning) mode'),
+    'rehab_level': ('choice', 'quiz', 'Rehab method: explain, quiz or cloze'),
+    'rehab_journal': ('bool', False, 'Log rehab quiz and blank results to ~/.cc_rehab for --rehab-review'),
     'divide': ('bool', False, 'Enable Large Task Mode'),
     'diff': ('bool', False, 'Inject the uncommitted git or TFS diff into the prompt'),
     'file_culling': ('bool', False, 'Enable file culling and AST map generation'),
@@ -50,6 +52,7 @@ CHOICES = {
     'prompt_ui': ('cli', 'tui'),
     'apply_ui': ('cli', 'tui'),
     'consult_transport': ('clipboard', 'file', 'both'),
+    'rehab_level': ('explain', 'quiz', 'cloze'),
 }
 
 # argparse dest -> settings key. None means "no persistent setting; off unless asked".
@@ -60,6 +63,7 @@ ARG_TOGGLES = {
     'cli': 'cli',
     'consult': 'consult',
     'rehab': 'rehab',
+    'rehab_journal': 'rehab_journal',
     'divide': 'divide',
     'diff': 'diff',
     'file_culling': 'file_culling',
@@ -81,6 +85,7 @@ ARGV_ALIASES = {
     '--cli': '--cli',
     '--consult': '--consult',
     '--rehab': '--rehab',
+    '--rehab-journal': '--rehab-journal',
     '--divide': '--divide',
     '-d': '--diff', '--diff': '--diff',
     '--file-culling': '--file-culling', '--file-cull': '--file-culling',
@@ -303,6 +308,16 @@ def resolve_settings(args, settings):
     if getattr(args, 'consult_transport', None) is None:
         args.consult_transport = settings.get('consult_transport') or 'clipboard'
     args.consult_answer_budget = settings.get('consult_answer_budget', 250)
+
+    # A level on the command line is an explicit request for rehab, so it
+    # switches the mode on even when the saved setting has it off.
+    if getattr(args, 'rehab_level', None):
+        args.rehab = True
+    else:
+        args.rehab_level = settings.get('rehab_level') or 'quiz'
+    # From here on args.rehab carries the level itself, or None when rehab is
+    # off, so prompt builders and listeners get the method with no extra flag.
+    args.rehab = args.rehab_level if args.rehab else None
 
     if getattr(args, 'limit', None) is None:
         args.limit = settings.get('limit', 100)

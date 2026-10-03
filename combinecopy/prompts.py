@@ -606,32 +606,133 @@ Output the payload wrapped in a markdown code block:
 
 def get_prune(xml_mode: bool = False) -> str:
     return PRUNE_XML if xml_mode else PRUNE_DEFAULT
-REHAB_DEFAULT = r"""<rehab_mode>
-The user is currently in REHAB MODE to practice their coding skills.
-In your EXECUTION payload, for every `search_replace` block (or file `content` for creations), you MUST add an `"instruction"` key before the `"search"` key, and an optional `"hints"` array (up to 3 string hints).
-The `"instruction"` must be a plain-English explanation of the logical changes being made (e.g., "Refactor this loop to use a dictionary lookup for O(1) time complexity"). Do NOT write code in the instruction. The user will read this instruction and attempt to write the code themselves.
-Example:
-{
-  "instruction": "Convert the list comprehension to a generator expression to save memory.",
-  "hints": ["Think about using parentheses instead of square brackets."],
-  "search": "...",
-  "replace": "..."
+
+REHAB_LEVELS = ("explain", "quiz", "cloze")
+
+_REHAB_INTRO = (
+    "The user is in REHAB MODE at the `{level}` level. Your code is applied to their files exactly as normal. "
+    "Rehab only adds a small teaching layer to the SAME EXECUTION payload, so keep every rehab field short: "
+    "it is a margin note on your code, not a tutorial."
+)
+
+_REHAB_LESSON = (
+    "LESSONS: On every block that carries a real idea, add a `lesson` with three one-sentence fields: "
+    "`concept` (the technique, in a few words), `why` (why it is the right call here) and `watch_out` "
+    "(what breaks, or what to be careful with). Keep the whole lesson under about 40 words and never put code in it. "
+    "Skip lessons on pure boilerplate such as imports, renames and wiring. For a created file, put the lesson on the file entry."
+)
+
+_REHAB_QUIZ = (
+    "QUIZ: Add a `quiz` to the one or two file entries that carry the most important change, with at most 3 questions "
+    "across the whole payload. The user answers right after that file is applied, with its diff on screen beside the "
+    "question, so every question must be answerable by reading that change. Ask what happens if a line is removed, "
+    "an input changes, an edge case arrives or the code runs twice. Never ask trivia, and never ask about code outside "
+    "the diff. Give 3 or 4 options, set `answer` to the 1-based number of the correct option, and add a one-sentence `explanation`."
+)
+
+_REHAB_CLOZE = (
+    "BLANKS: On at most 3 blocks in the whole payload, the ones holding the core idea, add `blank`: an exact copy of "
+    "1 to 3 whole consecutive lines from that block's `replace`, whitespace included. The tool applies your full change "
+    "but swaps those lines for TODO markers, and the user writes them. Pick lines that hold a decision: a condition, "
+    "a key expression, or a call with the right arguments. Never blank a line whose removal leaves the file unparseable, "
+    "such as a line that opens a block, a decorator, or a line inside a multi-line expression or literal. With each blank "
+    "add a `ladder` of exactly 3 hints from vague to specific: the intent, the approach, then pseudocode. The first hint "
+    "is printed in the TODO marker, and no hint may contain the answer itself. For a created file, put `blank` and "
+    "`ladder` on the file entry and copy the blank from `content`."
+)
+
+_REHAB_EXAMPLE_QUESTION = {
+    "id": "Q1",
+    "question": "What happens if summarise() is changed to loop over rows twice?",
+    "options": [
+        "Both loops see every row",
+        "The second loop sees no rows",
+        "It raises StopIteration",
+        "The file is parsed a second time",
+    ],
+    "answer": 2,
+    "explanation": "The first loop exhausts the generator, so the second one finds nothing left.",
 }
-</rehab_mode>"""
-REHAB_XML = r"""<rehab_mode>
-The user is currently in REHAB MODE to practice their coding skills.
-In your EXECUTION payload, for every `<block>` inside `<search_replace>` (or `<file>` for creations), you MUST include an `<instruction>` tag, and optionally a `<hints>` block containing `<hint>` tags (up to 3 hints).
-The `<instruction>` must be a plain-English explanation of the logical changes being made. Do NOT write code in the instruction. The user will read this instruction and attempt to write the code themselves.
-Example:
-<block>
-  <instruction>Convert the list comprehension to a generator expression to save memory.</instruction>
-  <hints>
-    <hint>Think about using parentheses instead of square brackets.</hint>
-  </hints>
-  <search><![CDATA[...]]></search>
-  <replace><![CDATA[...]]></replace>
-</block>
-</rehab_mode>"""
+_REHAB_EXAMPLE_LESSON = {
+    "concept": "Lazy evaluation with a generator",
+    "why": "summarise() walks the rows once, so they never need to sit in memory together.",
+    "watch_out": "A generator is single-pass, so a second loop over rows sees nothing.",
+}
+_REHAB_EXAMPLE_LADDER = [
+    "Stop holding every parsed row in memory at once.",
+    "Swap the eager list for something that produces rows on demand.",
+    "rows = <the same expression, but lazy>",
+]
+_REHAB_EXAMPLE_BLANK = "    rows = (parse(line) for line in handle)"
+
+
+def _rehab_json_example(level: str) -> str:
+    import json
+    block = {
+        "search": "    rows = [parse(line) for line in handle]\n    return summarise(rows)",
+        "replace": _REHAB_EXAMPLE_BLANK + "\n    return summarise(rows)",
+        "lesson": _REHAB_EXAMPLE_LESSON,
+    }
+    if level == "cloze":
+        block["blank"] = _REHAB_EXAMPLE_BLANK
+        block["ladder"] = _REHAB_EXAMPLE_LADDER
+    entry = {"action": "modify", "path": "relative/path/to/report.py", "search_replace": [block]}
+    if level in ("quiz", "cloze"):
+        entry["quiz"] = [_REHAB_EXAMPLE_QUESTION]
+    return json.dumps(entry, indent=2)
+
+
+def _rehab_xml_example(level: str) -> str:
+    lesson = _REHAB_EXAMPLE_LESSON
+    lines = [
+        "<file>",
+        "  <action>modify</action>",
+        "  <path>relative/path/to/report.py</path>",
+        "  <search_replace>",
+        "    <block>",
+        "      <search><![CDATA[...]]></search>",
+        "      <replace><![CDATA[...]]></replace>",
+        "      <lesson>",
+        f"        <concept><![CDATA[{lesson['concept']}]]></concept>",
+        f"        <why><![CDATA[{lesson['why']}]]></why>",
+        f"        <watch_out><![CDATA[{lesson['watch_out']}]]></watch_out>",
+        "      </lesson>",
+    ]
+    if level == "cloze":
+        lines.append(f"      <blank><![CDATA[{_REHAB_EXAMPLE_BLANK}]]></blank>")
+        lines.append("      <ladder>")
+        lines.extend(f"        <step><![CDATA[{step}]]></step>" for step in _REHAB_EXAMPLE_LADDER)
+        lines.append("      </ladder>")
+    lines.extend(["    </block>", "  </search_replace>"])
+    if level in ("quiz", "cloze"):
+        question = _REHAB_EXAMPLE_QUESTION
+        lines.extend(["  <quiz>", "    <question>", f"      <id>{question['id']}</id>"])
+        lines.append(f"      <text><![CDATA[{question['question']}]]></text>")
+        lines.extend(f"      <option><![CDATA[{option}]]></option>" for option in question["options"])
+        lines.append(f"      <answer>{question['answer']}</answer>")
+        lines.append(f"      <explanation><![CDATA[{question['explanation']}]]></explanation>")
+        lines.extend(["    </question>", "  </quiz>"])
+    lines.append("</file>")
+    return "\n".join(lines)
+
+
+def get_rehab(level="quiz", xml_mode: bool = False) -> str:
+    """Builds the rehab section for one level. Lower levels cost fewer tokens."""
+    if not isinstance(level, str) or level not in REHAB_LEVELS:
+        level = "quiz"
+    parts = ["<rehab_mode>", _REHAB_INTRO.format(level=level), _REHAB_LESSON]
+    if level in ("quiz", "cloze"):
+        parts.append(_REHAB_QUIZ)
+    if level == "cloze":
+        parts.append(_REHAB_CLOZE)
+    fence = "xml" if xml_mode else "json"
+    example = _rehab_xml_example(level) if xml_mode else _rehab_json_example(level)
+    parts.append(f"Example file entry with every rehab field this level uses:\n```{fence}\n{example}\n```")
+    if xml_mode:
+        parts.append("Wrap every rehab text value in <![CDATA[ ... ]]>, and put `<quiz>` inside `<file>`, after `</search_replace>`.")
+    parts.append("</rehab_mode>")
+    return "\n\n".join(parts)
+
 
 def get_consult(xml_mode: bool = False) -> str:
     return CONSULT_XML if xml_mode else CONSULT_DEFAULT
@@ -760,7 +861,7 @@ def get_system_prompt(agent_type: str = "default", file_cull: bool = False, xml_
     parts.append(get_execution(agent_type, xml_mode, consult, divide))  # get_execution already includes planning strings internally
     
     if rehab:
-        parts.append(REHAB_XML if xml_mode else REHAB_DEFAULT)
+        parts.append(get_rehab(rehab, xml_mode))
         
     if file_cull:
         parts.append(get_file_cull(xml_mode))

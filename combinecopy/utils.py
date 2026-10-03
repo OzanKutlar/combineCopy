@@ -479,6 +479,49 @@ def find_line_number(full_text: str, search_text: str) -> int:
                 break
     return 1
 
+def _strip_tag_sections(chunk: str, tags) -> str:
+    """Removes whole <tag>...</tag> sections so nested code cannot be misread as fields."""
+    for tag in tags:
+        chunk = re.sub(rf'<{tag}>.*?</{tag}>', '', chunk, flags=re.DOTALL)
+    return chunk
+
+
+def _read_rehab_xml(chunk: str, target: dict, get_tag_val, include_quiz: bool) -> None:
+    """Copies the rehab fields (lesson, blank, ladder and quiz) out of an XML chunk."""
+    lesson_m = re.search(r'<lesson>(.*?)</lesson>', chunk, re.DOTALL)
+    if lesson_m:
+        lesson = {}
+        for field in ("concept", "why", "watch_out"):
+            value = get_tag_val(lesson_m.group(1), field)
+            if value and value.strip():
+                lesson[field] = value.strip()
+        if lesson:
+            target["lesson"] = lesson
+    blank = get_tag_val(chunk, "blank")
+    if blank and blank.strip():
+        target["blank"] = blank
+    ladder_m = re.search(r'<ladder>(.*?)</ladder>', chunk, re.DOTALL)
+    if ladder_m:
+        steps = [_unwrap_cdata(step) for step in re.findall(r'<step>(.*?)</step>', ladder_m.group(1), re.DOTALL)]
+        target["ladder"] = [step for step in steps if step]
+    if not include_quiz:
+        return
+    quiz_m = re.search(r'<quiz>(.*?)</quiz>', chunk, re.DOTALL)
+    if not quiz_m:
+        return
+    questions = []
+    for q_chunk in re.findall(r'<question>(.*?)</question>', quiz_m.group(1), re.DOTALL):
+        questions.append({
+            "id": get_tag_val(q_chunk, "id"),
+            "question": get_tag_val(q_chunk, "text"),
+            "options": [_unwrap_cdata(option) for option in re.findall(r'<option>(.*?)</option>', q_chunk, re.DOTALL)],
+            "answer": get_tag_val(q_chunk, "answer"),
+            "explanation": get_tag_val(q_chunk, "explanation"),
+        })
+    if questions:
+        target["quiz"] = questions
+
+
 def parse_xml_to_dict(xml_str: str) -> dict:
     """Parses the strict <antigravity_payload> schema back into the equivalent JSON dict format."""
     import re
@@ -511,13 +554,10 @@ def parse_xml_to_dict(xml_str: str) -> dict:
                 content = get_tag_val(file_chunk, "content")
                 if content is not None:
                     f_obj["content"] = content
-                inst = get_tag_val(file_chunk, "instruction")
-                if inst is not None:
-                    f_obj["instruction"] = inst
+                file_level = _strip_tag_sections(file_chunk, ("search_replace", "regex_replace", "content"))
+                _read_rehab_xml(file_level, f_obj, get_tag_val, include_quiz=True)
                     
-                hints_m = re.search(r'<hints>(.*?)</hints>', file_chunk, re.DOTALL)
-                if hints_m:
-                    f_obj["hints"] = [h.strip() for h in re.findall(r'<hint>(.*?)</hint>', hints_m.group(1), re.DOTALL) if h.strip()]
+
                 
                 sr_m = re.search(r'<search_replace>(.*?)</search_replace>', file_chunk, re.DOTALL)
                 if sr_m:
@@ -525,14 +565,10 @@ def parse_xml_to_dict(xml_str: str) -> dict:
                     for block in re.findall(r'<block>(.*?)</block>', sr_m.group(1), re.DOTALL):
                         s = get_tag_val(block, "search")
                         r = get_tag_val(block, "replace")
-                        i = get_tag_val(block, "instruction")
                         blk = {}
-                        if i is not None:
-                            blk["instruction"] = i
+                        _read_rehab_xml(_strip_tag_sections(block, ("search", "replace")), blk, get_tag_val, include_quiz=False)
                             
-                        b_hints_m = re.search(r'<hints>(.*?)</hints>', block, re.DOTALL)
-                        if b_hints_m:
-                            blk["hints"] = [h.strip() for h in re.findall(r'<hint>(.*?)</hint>', b_hints_m.group(1), re.DOTALL) if h.strip()]
+
                             
                         if s is not None and r is not None:
                             blk["search"] = s
