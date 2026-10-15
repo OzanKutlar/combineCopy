@@ -35,11 +35,9 @@ def resolve_identity_line(identity: str | None = "antigravity") -> str:
     if lowered.startswith("you are ") or lowered.startswith("<identity>"):
         return raw
     return f"You are {raw}, a powerful agentic AI coding assistant."
-
-
 def resolve_xml_root_tag(identity: str | None = "antigravity") -> str:
     """Returns a clean XML root tag matching the active identity."""
-     import re
+    import re
     raw = (identity or "antigravity").strip().lower()
     if not raw or raw == "antigravity":
         return "antigravity_payload"
