@@ -18,6 +18,7 @@ from rich.rule import Rule
 from rich.table import Table
 from rich import box
 from rich.text import Text
+from rich.markdown import Markdown
 
 from combinecopy.utils import (
     console,
@@ -73,9 +74,10 @@ class ApplyCliSession:
 
     # Every command that is exactly one character, so a chain can be split on
     # character boundaries once the leading digits have been consumed.
-    _SINGLE_COMMANDS = "vaAdDcmfrehlptq?nkg"
+    _SINGLE_COMMANDS = "vaAdDcmfrehlptq?nkgi"
     # Multi-character words that must never be split into their letters.
-    _WORD_COMMANDS = ("help", "list", "quit", "exit")
+    # 'md' matters most here: split, it would run Meld and then discard.
+    _WORD_COMMANDS = ("help", "list", "quit", "exit", "md", "markdown", "info")
 
     def __init__(
         self,
@@ -261,6 +263,8 @@ class ApplyCliSession:
         commit_msg = self.payload.get("commit_message")
         if commit_msg:
             console.print(f"[dim]Proposed commit: {commit_msg.splitlines()[0]}[/dim]")
+        if self._payload_markdown():
+            console.print("[dim]AI notes available. Press 'i' (or type 'md') to read them.[/dim]")
 
     def _print_selected_details(self) -> None:
         if self.selected_idx is None or not self.payload:
@@ -290,6 +294,35 @@ class ApplyCliSession:
         if f.get("quiz") and f.get("_status") == "applied":
             hints.append("'t' to retake the quiz")
         console.print(f"[dim]Press {', '.join(hints)}.[/dim]")
+
+    def _payload_markdown(self) -> str:
+        """Returns the payload's markdown message stripped, or an empty string."""
+        if not self.payload:
+            return ""
+        md_text = self.payload.get("markdown")
+        if not isinstance(md_text, str):
+            return ""
+        return md_text.strip()
+
+    def _print_markdown(self) -> None:
+        """Renders the AI's markdown message from the loaded payload in a panel."""
+        if not self.payload:
+            console.print("[yellow]No payload loaded. Copy one and press 'r' to reload.[/yellow]")
+            return
+        md_text = self._payload_markdown()
+        if not md_text:
+            console.print("[dim yellow](No markdown message in this payload.)[/dim yellow]")
+            return
+        try:
+            console.print(Panel(
+                Markdown(md_text),
+                title="[bold cyan]AI Execution Notes[/bold cyan]",
+                border_style="cyan",
+                box=box.ROUNDED,
+            ))
+        except Exception as e:
+            console.print(f"[yellow]Could not render the markdown ({escape(str(e))}); showing it as plain text.[/yellow]")
+            console.print(Text(md_text))
 
     def _render_selected_diff(self) -> None:
         if self.selected_idx is None or not self.payload:
@@ -1114,6 +1147,9 @@ class ApplyCliSession:
         elif cmd in ("l", "list"):
             self._print_files_table()
 
+        elif cmd in ("i", "md", "markdown", "info"):
+            self._print_markdown()
+
         elif cmd in ("q", "quit", "exit"):
             self._warn_open_blanks()
             return "quit"
@@ -1203,6 +1239,7 @@ class ApplyCliSession:
         console.print("  [cyan]r[/cyan]            Reload inbound payload from clipboard / inbox")
         console.print("  [cyan]e[/cyan]            Copy validation or JSON error to clipboard")
         console.print("  [cyan]l[/cyan]            Reprint the file status table")
+        console.print("  [cyan]i[/cyan] / [cyan]md[/cyan]       View the AI's markdown notes from the payload")
         console.print("  [cyan]t[/cyan]            Rehab: retake the selected file's quiz, or list its open blanks")
         console.print("  [cyan]n[/cyan]            Rehab: next hint for the selected file's open blank")
         console.print("  [cyan]k[/cyan]            Rehab: check your attempt at the selected file's blanks")

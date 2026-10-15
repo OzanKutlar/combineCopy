@@ -431,6 +431,8 @@ Set `apply_ui` to `cli`, or pass `--apply-cli`, and the full-screen Textual appl
 
 On launch, the CLI apply listener automatically reads the execution payload currently on your clipboard. If your clipboard is empty or updated, press `r` to reload.
 
+When the payload carries a markdown message, a line under the pending files table says so. Press `i`, or type `md`, to read it rendered in the terminal.
+
 | Command | Description |
 | :--- | :--- |
 | `<number>` | Select a file by index to inspect warnings and errors |
@@ -445,6 +447,7 @@ On launch, the CLI apply listener automatically reads the execution payload curr
 | `r` | Reload payload from clipboard (or inbox on Termux) |
 | `e` | Copy validation or JSON syntax error to clipboard |
 | `l` | Reprint the pending files table |
+| `i`, `md` | Show the AI's markdown message from the execution payload |
 | `?`, `help` | Show command help |
 | `t` | Rehab: retake the selected file's quiz, or list its open blanks |
 | `n` | Rehab: reveal the next hint for the selected file's open blank |
