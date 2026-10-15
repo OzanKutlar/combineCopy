@@ -142,6 +142,11 @@ The `off` word is only consumed when it appears on its own immediately after the
 | `--apply-cli`, `--apply-tui` | Choose terminal interface or Textual TUI for the apply listener. | tui | none |
 | `--apply-chain` | Allow several apply-listener commands on one line, e.g. `5m` or `ac`. | false | none |
 | `--web` | Launch the local Flask-based Web UI server on `127.0.0.1:5000`. | false | none |
+| `--settings [category]` | Open the settings editor, optionally on one category, then exit. | none | none |
+| `--settings-cli`, `--settings-tui` | Choose the plain terminal or Textual editor for `--settings`. | tui | none |
+| `--set <key=value>` | Save a setting without opening the editor. Repeatable. | none | none |
+| `--get <key>` | Print one setting and exit. | none | none |
+| `--unset <key>` | Reset a setting to its built-in default. Repeatable. | none | none |
 
 ### Agent & Execution Modes
 
@@ -294,12 +299,58 @@ Every answer is saved to `~/.cc_consult/consult_log.jsonl`, so a question you ha
 Typing the same four flags every run gets old. `combineCopy` keeps persistent defaults in `~/.configs/combineCopy/settings.json`, alongside the existing AST cache and ignore files.
 
 ```bash
-combineCopy --settings          # interactive editor
-combineCopy --settings --list   # print the current values and exit
-combineCopy --settings --reset  # delete the file, back to built-in defaults
+combineCopy --settings              # open the settings editor
+combineCopy --settings rehab        # open it straight on one category
+combineCopy --settings --list       # print every category and exit
+combineCopy --settings rehab --list # print one category and exit
+combineCopy --settings --reset      # delete the file, back to built-in defaults
 ```
 
-The editor is a numbered menu. Booleans toggle when you select them, `mobile` cycles through auto/on/off, and everything else prompts for a value. Nothing is written until you press `s`.
+Settings are grouped into seven categories: Payload & Prompt, Interface, Agent Modes, Rehab, Consult, Scanning and Environment. Wherever a category is asked for, you can give its number, its name, or any unambiguous prefix such as `reh` or `agent`.
+
+### The settings TUI
+
+By default `--settings` opens a full-screen editor. Categories sit on the left, each with a count of changed values, and the selected category's settings sit on the right. Each setting gets a widget that matches its type: a switch, a dropdown or a text field. The identity, editor and system fields also have a preset picker that fills the text field for you.
+
+| Key | Does |
+| :--- | :--- |
+| `Ctrl+S` | Save and exit |
+| `Esc` | Quit. With unsaved changes, press it twice |
+| `/` or `Ctrl+F` | Search key names and descriptions |
+| `Ctrl+R` | Reset the focused setting to its built-in default |
+| `Ctrl+T` | Reset every setting on the current page |
+
+Text is checked as you type. An invalid value gets a red border and an explanation below the form, and saving is refused until it is fixed. A `●` marks any value that differs from its built-in default. Letter keys are left free for typing, which is why the shortcuts use Ctrl.
+
+### The CLI editor
+
+Set `settings_ui` to `cli`, or pass `--settings-cli`, for a plain terminal editor. `--settings-tui` forces the full screen back for one run. If the TUI cannot start, the CLI editor opens instead.
+
+The CLI editor opens on a short category menu, and each category is its own small page:
+
+| Command | Where | Does |
+| :--- | :--- | :--- |
+| `<number>` | Menu | Open that category |
+| `<number>` | Page | Change that setting. Booleans toggle, `mobile` cycles auto/on/off, everything else prompts |
+| `r <number>` | Page | Reset that setting to its built-in default |
+| `n` / `p` | Page | Next or previous category |
+| `b` | Page | Back to the menu |
+| `a` | Menu | Every setting in one table |
+| `/text` | Anywhere | Search key names and descriptions |
+| `s` | Anywhere | Save and exit |
+| `q` | Anywhere | Quit, asking first if there are unsaved changes |
+
+Changes carry across pages, so you can edit several categories and save once. The header counts your unsaved changes, and nothing is written until you save.
+
+### Setting values from a script
+
+```bash
+combineCopy --set xml=on --set limit=50   # repeatable, saved together
+combineCopy --get rehab_level             # prints the plain value
+combineCopy --unset identity              # back to the built-in default
+```
+
+These use the same validation as the editors. If any value is invalid, nothing is saved and the command exits with status 1.
 
 ### Precedence
 
@@ -319,6 +370,7 @@ When any setting differs from its built-in default, a dim one-line banner names 
 | `prompt_ui` | `cli` / `tui` | `tui` | How the request area is presented |
 | `apply_ui` | `cli` / `tui` | `tui` | How the apply listener is presented |
 | `apply_chain` | on/off | off | Allow chained apply commands like `5m` or `ac` |
+| `settings_ui` | `cli` / `tui` | `tui` | How the settings editor is presented |
 | `tfs` | on/off | off | Use TFVC instead of git |
 | `cli` | on/off | off | Let the AI emit terminal commands |
 | `consult` | on/off | off | Enable the external Expert LLM phase |

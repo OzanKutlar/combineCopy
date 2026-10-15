@@ -62,12 +62,16 @@ from combinecopy.settings import (
     describe_active,
     load_settings,
     normalize_argv,
+    resolve_category,
     resolve_settings,
 )
 from combinecopy.settings_cli import (
     print_settings_table,
     reset_settings,
+    run_get,
+    run_set,
     run_settings_editor,
+    run_unset,
 )
 
 # Beyond this many hits, or this much of the file exposed, we stop and let the
@@ -623,6 +627,45 @@ def manage_tasks_cli(tasks_data, root_dir, max_depth, ext_filters, exclude_dirs,
         except ValueError:
             console.print("[red]Invalid input.[/red]")
 
+def run_settings_commands(console, args, settings):
+    """Runs --set, --unset and --get, in that order. Returns True when all succeed."""
+    if args.set and not run_set(console, args.set, settings):
+        return False
+    if args.unset and not run_unset(console, args.unset, settings):
+        return False
+    if args.get and not run_get(console, args.get, settings):
+        return False
+    return True
+
+
+def open_settings(console, args, settings):
+    """Sends --settings to --reset, --list, the settings TUI or the CLI editor."""
+    from rich.markup import escape
+
+    category = None
+    if args.settings:
+        category, error = resolve_category(args.settings)
+        if error:
+            console.print(f'[red]{escape(error)}[/red]')
+            return
+    if args.reset:
+        reset_settings(console)
+        return
+    if args.list:
+        print_settings_table(console, settings, category)
+        return
+    ui = args.settings_ui or settings.get('settings_ui') or 'tui'
+    if ui == 'tui':
+        try:
+            from combinecopy.tui.settings import run_settings_tui
+        except ImportError as error:
+            console.print(f'[yellow]The settings TUI is unavailable ({escape(str(error))}); using the CLI editor.[/yellow]')
+        else:
+            if run_settings_tui(console, category):
+                return
+    run_settings_editor(console, category)
+
+
 def resolve_random_paths(paths: list[str]) -> list[str]:
     resolved = []
     pattern = re.compile(r'\$\{r\((\d+),\s*(\d+)\)\}')
@@ -716,7 +759,12 @@ def main():
     parser.add_argument("--prompt-tui", action="store_const", const="tui", dest="prompt_ui", help="Force the Textual request TUI, overriding the saved setting.")
     parser.add_argument("--apply-cli", action="store_const", const="cli", dest="apply_ui", default=None, help="Run the apply listener in plain CLI mode instead of Textual TUI.")
     parser.add_argument("--apply-tui", action="store_const", const="tui", dest="apply_ui", help="Force the Textual apply TUI, overriding the saved setting.")
-    parser.add_argument("--settings", action="store_true", help="Open the settings editor, then exit.")
+    parser.add_argument("--settings", nargs="?", const="", default=None, metavar="CATEGORY", help="Open the settings editor, optionally on one category, then exit.")
+    parser.add_argument("--settings-cli", action="store_const", const="cli", dest="settings_ui", default=None, help="Use the numbered CLI settings editor for this run.")
+    parser.add_argument("--settings-tui", action="store_const", const="tui", dest="settings_ui", help="Use the full-screen settings TUI for this run.")
+    parser.add_argument("--set", action="append", default=None, metavar="KEY=VALUE", help="Save a setting without opening the editor. Repeatable.")
+    parser.add_argument("--get", default=None, metavar="KEY", help="Print one setting and exit.")
+    parser.add_argument("--unset", action="append", default=None, metavar="KEY", help="Reset a setting to its built-in default. Repeatable.")
     parser.add_argument("--list", action="store_true", help="With --settings, print the current settings and exit.")
     parser.add_argument("--reset", action="store_true", help="With --settings, delete the settings file and exit.")
     parser.add_argument("--mobile-doctor", action="store_true", help="Run environment checks for Termux mobile mode and exit.")
@@ -726,13 +774,11 @@ def main():
 
     settings = load_settings(console)
 
-    if args.settings:
-        if args.reset:
-            reset_settings(console)
-        elif args.list:
-            print_settings_table(console, settings)
-        else:
-            run_settings_editor(console)
+    if args.set or args.unset or args.get:
+        sys.exit(0 if run_settings_commands(console, args, settings) else 1)
+
+    if args.settings is not None:
+        open_settings(console, args, settings)
         return
 
     # Unset flags take their value from here; Termux detection happens inside.

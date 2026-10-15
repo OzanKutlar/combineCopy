@@ -23,6 +23,7 @@ DEFAULTS = {
     'prompt_ui': ('choice', 'tui', 'Request area style: cli or tui'),
     'apply_ui': ('choice', 'tui', 'Apply listener style: cli or tui'),
     'apply_chain': ('bool', False, 'Allow chained apply commands like 5m or ac'),
+    'settings_ui': ('choice', 'tui', 'Settings editor style: cli or tui'),
     'tfs': ('bool', False, 'Use TFVC (tf.exe) instead of git'),
     'cli': ('bool', False, 'Let the AI emit terminal commands in its payload'),
     'consult': ('bool', False, 'Enable the external Expert LLM consult phase'),
@@ -52,9 +53,89 @@ DEFAULTS = {
 CHOICES = {
     'prompt_ui': ('cli', 'tui'),
     'apply_ui': ('cli', 'tui'),
+    'settings_ui': ('cli', 'tui'),
     'consult_transport': ('clipboard', 'file', 'both'),
     'rehab_level': ('explain', 'quiz', 'cloze'),
 }
+
+# Ordered (name, keys) pairs. Every key in DEFAULTS sits in exactly one
+# category, and the check below fails at import time if the two drift apart.
+CATEGORIES = (
+    ('Payload & Prompt', ('xml', 'identity', 'system', 'prune', 'diff', 'file')),
+    ('Interface', ('prompt_ui', 'apply_ui', 'apply_chain', 'settings_ui', 'editor')),
+    ('Agent Modes', ('cli', 'divide', 'auto', 'select', 'file_culling', 'web_apply')),
+    ('Rehab', ('rehab', 'rehab_level', 'rehab_journal')),
+    ('Consult', ('consult', 'consult_transport', 'consult_answer_budget')),
+    ('Scanning', ('limit', 'batches', 'file_types', 'exclude')),
+    ('Environment', ('tfs', 'mobile')),
+)
+
+
+def _check_categories():
+    listed = [key for _, keys in CATEGORIES for key in keys]
+    missing = sorted(set(DEFAULTS) - set(listed))
+    unknown = sorted(set(listed) - set(DEFAULTS))
+    duplicated = sorted({key for key in listed if listed.count(key) > 1})
+    if missing or unknown or duplicated:
+        raise RuntimeError(
+            'settings.CATEGORIES is out of sync with DEFAULTS: '
+            f'missing={missing}, unknown={unknown}, duplicated={duplicated}'
+        )
+
+
+_check_categories()
+
+
+def category_names():
+    return [name for name, _ in CATEGORIES]
+
+
+def category_keys(name):
+    for category, keys in CATEGORIES:
+        if category == name:
+            return list(keys)
+    return []
+
+
+def category_of(key):
+    for category, keys in CATEGORIES:
+        if key in keys:
+            return category
+    return None
+
+
+def ordered_keys():
+    """Every key, in category order rather than DEFAULTS order."""
+    return [key for _, keys in CATEGORIES for key in keys]
+
+
+def _slug(text):
+    return ''.join(char for char in text.lower() if char.isalnum())
+
+
+def resolve_category(text):
+    """Returns (name, error) for a 1-based number, a full name or an unambiguous prefix."""
+    if not isinstance(text, str) or not text.strip():
+        return None, 'No category was given.'
+    token = text.strip()
+    names = category_names()
+    listed = ', '.join(names)
+    if token.isdigit():
+        index = int(token) - 1
+        if 0 <= index < len(names):
+            return names[index], None
+        return None, f'There is no category {token}. Pick 1 to {len(names)}.'
+    wanted = _slug(token)
+    exact = [name for name in names if wanted and _slug(name) == wanted]
+    if exact:
+        return exact[0], None
+    prefixed = [name for name in names if wanted and _slug(name).startswith(wanted)]
+    if len(prefixed) == 1:
+        return prefixed[0], None
+    if prefixed:
+        matches = ', '.join(prefixed)
+        return None, f'{token} matches more than one category: {matches}.'
+    return None, f'Unknown category {token}. Categories: {listed}.'
 
 # argparse dest -> settings key. None means "no persistent setting; off unless asked".
 ARG_TOGGLES = {
@@ -213,6 +294,134 @@ def _built_in():
     }
 
 
+def _is_explicit_null(value):
+    """True for the values a nullable setting may legitimately store as None."""
+    if value is None:
+        return True
+    return isinstance(value, str) and value.strip().lower() in ('', 'auto', 'none')
+
+
+def default_for(key):
+    """Returns a fresh copy of a setting's built-in default."""
+    default = DEFAULTS[key][1]
+    return list(default) if isinstance(default, list) else default
+
+
+def is_changed(key, value):
+    """True when value differs from the built-in default."""
+    return value != DEFAULTS[key][1]
+
+
+def format_setting_value(key, value):
+    """Plain-text form of a value. parse_setting_text reads it back unchanged."""
+    kind = DEFAULTS[key][0]
+    if kind == 'bool':
+        return 'on' if value else 'off'
+    if kind == 'nullable-bool':
+        if value is None:
+            return 'auto'
+        return 'on' if value else 'off'
+    if kind == 'list':
+        return ' '.join(value or [])
+    if kind == 'nullable-str':
+        return value if value else 'auto'
+    if kind == 'bool-or-str':
+        if value is True:
+            return 'on'
+        if not value:
+            return 'off'
+        return str(value)
+    return '' if value is None else str(value)
+
+
+def _parse_bool_text(key, text):
+    state = parse_bool_word(text)
+    if state is None:
+        return None, 'Use on or off.'
+    return state, None
+
+
+def _parse_nullable_bool_text(key, text):
+    if text.lower() in ('', 'auto', 'none'):
+        return None, None
+    state = parse_bool_word(text)
+    if state is None:
+        return None, 'Use auto, on or off.'
+    return state, None
+
+
+def _parse_int_text(key, text):
+    try:
+        number = int(text)
+    except ValueError:
+        return None, 'Enter a whole number.'
+    if number < 1:
+        return None, 'The value must be 1 or greater.'
+    return number, None
+
+
+def _parse_choice_text(key, text):
+    lowered = text.lower()
+    if lowered in CHOICES[key]:
+        return lowered, None
+    options = ', '.join(CHOICES[key])
+    return None, f'Pick one of: {options}.'
+
+
+def _parse_list_text(key, text):
+    if text.lower() in ('', 'none', 'clear'):
+        return [], None
+    return text.replace(',', ' ').split(), None
+
+
+def _parse_str_text(key, text):
+    if not text:
+        return None, 'The value cannot be empty.'
+    return text, None
+
+
+def _parse_nullable_str_text(key, text):
+    if text.lower() in ('', 'auto', 'none', 'clear'):
+        return None, None
+    return text, None
+
+
+def _parse_bool_or_str_text(key, text):
+    if not text:
+        return None, 'Use on, off, or a path to a custom system prompt.'
+    state = parse_bool_word(text)
+    return (text if state is None else state), None
+
+
+_TEXT_PARSERS = {
+    'bool': _parse_bool_text,
+    'nullable-bool': _parse_nullable_bool_text,
+    'int': _parse_int_text,
+    'choice': _parse_choice_text,
+    'list': _parse_list_text,
+    'str': _parse_str_text,
+    'nullable-str': _parse_nullable_str_text,
+    'bool-or-str': _parse_bool_or_str_text,
+}
+
+
+def parse_setting_text(key, raw):
+    """Turns typed text into a validated value. Returns (value, error).
+
+    The CLI editor, the settings TUI and --set all go through here, so they
+    accept and reject exactly the same input. A None value with no error is
+    a valid answer for the nullable settings, and means auto.
+    """
+    if key not in DEFAULTS:
+        return None, f'Unknown setting {key!r}.'
+    if not isinstance(raw, str):
+        return None, 'The value must be text.'
+    parser = _TEXT_PARSERS.get(DEFAULTS[key][0])
+    if parser is None:
+        return None, f'Setting {key!r} cannot be set from text.'
+    return parser(key, raw.strip())
+
+
 def load_settings(console=None):
     """Reads the settings file. A bad file degrades loudly, it never raises."""
     data = _built_in()
@@ -239,7 +448,7 @@ def load_settings(console=None):
                 console.print(f"[dim yellow]Warning: unknown setting '{key}' was ignored.[/dim yellow]")
             continue
         coerced = _coerce(key, value)
-        if coerced is None and DEFAULTS[key][0] not in nullable:
+        if coerced is None and not (DEFAULTS[key][0] in nullable and _is_explicit_null(value)):
             if console:
                 console.print(f"[dim yellow]Warning: setting '{key}' has an invalid value and was ignored.[/dim yellow]")
             continue
