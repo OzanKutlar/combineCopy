@@ -164,6 +164,9 @@ The `off` word is only consumed when it appears on its own immediately after the
 | `--consult-transport <mode>` | How consult questions and answers travel: `clipboard`, `file` (via `~/.cc_consult`), or `both`. | clipboard | none |
 | `--xml` | Instruct the AI to output XML payloads instead of JSON, bypassing quote-escaping vulnerabilities. | false | -x |
 | `--json-select` | Parse a selection payload directly from the clipboard to automatically retrieve files, functions, and search results during the exploration phase. | false | -js |
+| `--search-confirm` | Ask per file how to handle oversized search results, instead of taking the default automatically. | false | none |
+| `--search-max-files <int>` | Files one search query may match before you must accept, narrow or reject it. | 100 | none |
+| `--search-max-tokens <int>` | Tokens one search query may match before you must accept, narrow or reject it. | 50000 | none |
 
 > [!NOTE]
 > `--auto` was the original spelling of `--apply` and still works, but `--apply` is the name to reach for. `-a` is unchanged.
@@ -185,7 +188,25 @@ When two matches sit close enough that their context windows overlap, the window
 
 Queries match as literal substrings by default. Pass `"regex": true` for pattern matching, or `"case_sensitive": false` to widen the match. The 50-line context is deliberately fixed and not exposed to the model.
 
-Two interactive guards keep a sloppy query from swallowing the workspace. If a search returns more than 25 hits, or its merged windows would expose 80% or more of the file, you are asked whether to include the whole file, keep every block, truncate to the first 25 hits, or skip. Pressing Enter takes the whole file when coverage is 80% or more, and keeps every block otherwise; truncate is never the default. If you truncate, the model is told how many matches were withheld so it can narrow the query itself. If the path is missing or does not resolve, you are shown how many files the current scan holds and can either search all of them or pick a subset through the file selector TUI.
+`path` can also name a folder. Every scanned file beneath it is searched, so `-f` and `--exclude` still apply, and only files with a match are returned. A partial folder path works too: `tui` resolves to `combinecopy/tui`, and when it matches several folders, all of them are searched.
+
+```json
+{ "path": "combinecopy/tui", "query": "def on_mount" }
+```
+
+Each file's results are sized automatically. When a file returns more than 25 hits, or its merged windows would expose 80% or more of it, the whole file is included if coverage is 80% or more, and every block is kept otherwise. Turn `search_confirm` on, or pass `--search-confirm`, to be asked per file instead, with the extra options to truncate to the first 25 hits or skip the file. If you truncate, the model is told how many matches were withheld.
+
+Each query is then checked for breadth. When a single query matches 100 or more files, or 50,000 or more tokens, whichever comes first, you are shown the totals and must choose:
+
+| Key | Does |
+| :--- | :--- |
+| `A` | Accept every matched file |
+| `S` | Narrow the scope in the file selector, which lists only the matched files |
+| `R` | Reject the query as too broad |
+
+This prompt has no default, so Enter alone just asks again. Narrowing or rejecting adds a note telling the model what happened, so it can ask for a smaller slice instead, such as only the functions it needs from a gigantic file. The limits live in `search_max_files` and `search_max_tokens`, or `--search-max-files` and `--search-max-tokens` for one run. Tokens are counted with `tiktoken` when it is installed, and estimated at four characters per token otherwise.
+
+If the path is missing or does not resolve, you are shown how many files the current scan holds and can either search all of them or pick a subset through the file selector TUI. If a SELECT payload ends up with no files at all, for example because its only search was rejected, the notes alone are copied so the model still learns why.
 
 ### Environment Integrations
 
@@ -394,6 +415,9 @@ When any setting differs from its built-in default, a dim one-line banner names 
 | `batches` | number | 1 | Default batch count |
 | `file_types` | list | none | Default extension filter |
 | `exclude` | list | none | Directories to always skip |
+| `search_confirm` | on/off | off | Ask per file how to handle oversized search results |
+| `search_max_files` | number | 100 | Files one search query may match before you must accept, narrow or reject it |
+| `search_max_tokens` | number | 50000 | Tokens one search query may match before you must accept, narrow or reject it |
 | `editor` | text | auto | Preferred editor (Notepad++, micro, nano, or custom command with `${file}`) |
 
 > [!NOTE]

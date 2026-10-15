@@ -78,6 +78,8 @@ A `SELECT` payload can mix all three freely:
 
 Search is the one worth understanding properly. It is the right tool for tracing call sites, finding every use of a config key, or locating a literal string that appears in an error message.
 
+A search `path` can be a folder as well as a file. Every scanned file beneath the folder is searched, and only the files with a match come back. A partial path such as `tui` resolves to `combinecopy/tui`.
+
 ## 6. Feed the selection back
 
 Copy the payload and run:
@@ -94,19 +96,17 @@ Three prompts can appear here, all of them recoverable:
 
 - **Ambiguous paths.** If a requested path matches several files, you are shown the candidates and can pick `A` for all, or comma-separated numbers.
 - **Missing files.** Anything that cannot be resolved is listed, and you are asked whether to continue without it. The model is told what was missing, so it can correct itself.
-- **An oversized search.** If a query matches more than 25 lines, or its context windows would expose 80% or more of the file, you get a choice.
-
-![The F, A, T, S prompt for an oversized search](../images/usecases/uc1-05-search-guard.png)
+- **An overly broad search.** If a single query matches 100 or more files, or 50,000 or more tokens, whichever comes first, you are shown the totals and must choose. There is no default, so a stray Enter cannot accept it for you.
 
 | Key | Does |
 | :--- | :--- |
-| `F` | Include the whole file instead. Often the honest answer |
-| `A` | Include every match as context blocks anyway |
-| `T` | Truncate to the first 25 matches |
-| `S` | Skip this search entirely |
-| Enter | Take the default: `F` when coverage is 80% or more, otherwise `A`. Truncate is never the default |
+| `A` | Accept every matched file |
+| `S` | Narrow the scope in the file selector, which lists only the matched files |
+| `R` | Reject the query as too broad |
 
-If you truncate, the model is explicitly told how many matches were withheld, so it can narrow the query and search again rather than assuming it saw everything.
+Narrowing or rejecting adds a note to the prompt, so the model knows its search was cut down or refused. Rejecting one gigantic file is often the best move: the model can then ask for only the functions it needs. The limits are `search_max_files` and `search_max_tokens` in `combineCopy --settings`.
+
+Within each file, oversized results are handled automatically. When the context windows would expose 80% or more of a file, the whole file is sent instead; otherwise every match is kept as its own block. Turn `search_confirm` on to be asked per file instead, with options to truncate to the first 25 matches or skip the file. If you truncate, the model is explicitly told how many matches were withheld, so it can narrow the query and search again rather than assuming it saw everything.
 
 ## 7. Read the search note
 

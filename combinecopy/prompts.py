@@ -384,8 +384,8 @@ Output the payload wrapped in a markdown code block:
 3. Omitted lines are marked as `// ... (lines 84-231 hidden) ...` so you can always tell where a block sits in the original file.
 4. `query` is matched as a **literal substring** by default. Set `"regex": true` only if you genuinely need a pattern, and remember to escape backslashes correctly for JSON.
 5. `case_sensitive` defaults to `true`. Set it to `false` to widen the match.
-6. Keep queries specific. A query matching hundreds of lines will prompt the user to truncate it, and you will be told how many matches were withheld.
-7. If `path` is omitted or does not resolve, the user will be asked which files to search instead. Provide a path whenever you can.
+6. Keep queries specific. If matches would expose most of a file, the whole file is sent instead of context blocks. If one search matches a large number of files or a large amount of text, the user is asked first and may accept it, narrow it to fewer files, or reject it as too broad. You will be told which, and if results are ever truncated, how many matches were withheld. After a rejection, retry with a narrower `path`, a more specific query, or a `functions` request for only the part you need.
+7. `path` may be a single file or a folder. A folder searches every file beneath it recursively, and only files containing a match are returned. If `path` is omitted or does not resolve, the user will be asked which files to search instead. Provide a path whenever you can.
 
 The user's tool will automatically parse this and copy the requested context into your clipboard, along with a note reporting how many matches each search found.
 </file_culling_instructions>"""
@@ -430,8 +430,8 @@ Output the payload wrapped in a markdown code block:
 3. Omitted lines are marked as `// ... (lines 84-231 hidden) ...` so you can always tell where a block sits in the original file.
 4. `<query>` is matched as a **literal substring** by default. Always wrap it in `<![CDATA[ ... ]]>`. Set `<regex>true</regex>` only if you genuinely need a pattern.
 5. `<case_sensitive>` defaults to true. Set it to false to widen the match.
-6. Keep queries specific. A query matching hundreds of lines will prompt the user to truncate it, and you will be told how many matches were withheld.
-7. If `<path>` is omitted or does not resolve, the user will be asked which files to search instead. Provide a path whenever you can.
+6. Keep queries specific. If matches would expose most of a file, the whole file is sent instead of context blocks. If one search matches a large number of files or a large amount of text, the user is asked first and may accept it, narrow it to fewer files, or reject it as too broad. You will be told which, and if results are ever truncated, how many matches were withheld. After a rejection, retry with a narrower `<path>`, a more specific `<query>`, or a `<functions>` request for only the part you need.
+7. `<path>` may be a single file or a folder. A folder searches every file beneath it recursively, and only files containing a match are returned. If `<path>` is omitted or does not resolve, the user will be asked which files to search instead. Provide a path whenever you can.
 
 The user's tool will automatically parse this and copy the requested context into your clipboard, along with a note reporting how many matches each search found.
 </file_culling_instructions>"""

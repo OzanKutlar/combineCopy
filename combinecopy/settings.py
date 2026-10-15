@@ -47,6 +47,9 @@ DEFAULTS = {
     'batches': ('int', 1, 'Number of batches to split large copies into'),
     'file_types': ('list', [], 'Default file extensions to include'),
     'exclude': ('list', [], 'Directory names to always exclude from scans'),
+    'search_confirm': ('bool', False, 'Ask per file how to handle oversized search results instead of taking the default'),
+    'search_max_files': ('int', 100, 'Files one search query may match before you must accept, narrow or reject it'),
+    'search_max_tokens': ('int', 50000, 'Tokens one search query may match before you must accept, narrow or reject it'),
     'editor': ('nullable-str', None, 'Editor command override (auto = detect)'),
 }
 
@@ -66,7 +69,7 @@ CATEGORIES = (
     ('Agent Modes', ('cli', 'divide', 'auto', 'select', 'file_culling', 'web_apply')),
     ('Rehab', ('rehab', 'rehab_level', 'rehab_journal')),
     ('Consult', ('consult', 'consult_transport', 'consult_answer_budget')),
-    ('Scanning', ('limit', 'batches', 'file_types', 'exclude')),
+    ('Scanning', ('limit', 'batches', 'file_types', 'exclude', 'search_confirm', 'search_max_files', 'search_max_tokens')),
     ('Environment', ('tfs', 'mobile')),
 )
 
@@ -154,6 +157,7 @@ ARG_TOGGLES = {
     'auto': 'auto',
     'file': 'file',
     'web_apply': 'web_apply',
+    'search_confirm': 'search_confirm',
     'web': None,
     'revert': None,
     'json_select': None,
@@ -179,6 +183,7 @@ ARGV_ALIASES = {
     '--web': '--web',
     '-r': '--revert', '--revert': '--revert',
     '-js': '--json-select', '--json-select': '--json-select',
+    '--search-confirm': '--search-confirm',
     '-m': '--mobile', '--mobile': '--mobile',
     '--system': '--system',
 }
@@ -537,6 +542,10 @@ def resolve_settings(args, settings):
         args.limit = settings.get('limit', 100)
     if getattr(args, 'batches', None) is None:
         args.batches = settings.get('batches', 1)
+    if getattr(args, 'search_max_files', None) is None:
+        args.search_max_files = settings.get('search_max_files', 100)
+    if getattr(args, 'search_max_tokens', None) is None:
+        args.search_max_tokens = settings.get('search_max_tokens', 50000)
     if not getattr(args, 'file_types', None):
         args.file_types = list(settings.get('file_types') or []) or None
     if not getattr(args, 'exclude', None):

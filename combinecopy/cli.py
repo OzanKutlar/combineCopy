@@ -33,11 +33,14 @@ from combinecopy.utils import (
     display_summary,
     copy_to_clipboard,
     copy_file_to_clipboard,
-    render_partial_content,
-    find_search_hits,
-    build_search_blocks,
-    partial_coverage_ratio,
-    SEARCH_CONTEXT_LINES
+    render_partial_content
+)
+from combinecopy.selection_search import (
+    SearchContext,
+    SearchOptions,
+    build_search_note,
+    resolve_search_requests,
+    split_folder_searches,
 )
 
 from combinecopy.prompts import (
@@ -74,224 +77,8 @@ from combinecopy.settings_cli import (
     run_unset,
 )
 
-# Beyond this many hits, or this much of the file exposed, we stop and let the
-# user decide rather than silently dumping most of a file into the context.
-SEARCH_HIT_WARN_THRESHOLD = 25
-SEARCH_COVERAGE_WARN_RATIO = 0.8
 
-
-def _pick_search_targets(entry_path, resolved_map, scanned_files, root_dir):
-    """Resolves a search entry to relative paths, asking the user when it cannot."""
-    if entry_path and entry_path in resolved_map:
-        return resolved_map[entry_path]
-
-    label = f"'{entry_path}'" if entry_path else "(no path was provided)"
-    console.print(f"\n[bold yellow]Search target {label} could not be resolved.[/bold yellow]")
-    console.print(f"The current workspace scan holds [cyan]{len(scanned_files)}[/cyan] file(s).")
-    console.print("  [cyan]A.[/cyan] Search every file in the scanned workspace")
-    console.print("  [cyan]S.[/cyan] Select specific files to search (opens the file selector)")
-    console.print("  [cyan]Enter.[/cyan] Skip this search")
-
-    ans = console.input("[bold]Choice: [/bold]").strip().upper()
-    if ans == 'A':
-        return [os.path.relpath(f, root_dir).replace("\\", "/") for f in scanned_files]
-    if ans == 'S':
-        selected = run_file_selector(root_dir, scanned_files)
-        if not selected or not selected[0]:
-            console.print("[yellow]No files selected. Skipping this search.[/yellow]")
-            return []
-        return [os.path.relpath(f, root_dir).replace("\\", "/") for f in selected[0]]
-    return []
-
-
-def _default_large_search_choice(coverage):
-    """Returns the Enter-key default for the oversized search prompt.
-
-    Once most of the file would be exposed anyway, the whole file is the honest
-    answer. Below that, every match as its own block. Truncate is never chosen.
-    """
-    if coverage >= SEARCH_COVERAGE_WARN_RATIO:
-        return 'F'
-    return 'A'
-
-
-def _confirm_large_search(query, rel_path, hit_count, coverage, total_lines):
-    """Asks how to handle an oversized search. Returns full/all/truncate/skip.
-
-    An empty answer takes the coverage-dependent default from
-    _default_large_search_choice.
-    """
-    default_key = _default_large_search_choice(coverage)
-    options = [
-        ('F', "Include the whole file instead"),
-        ('A', "Include every match as context blocks anyway"),
-        ('T', f"Truncate to the first {SEARCH_HIT_WARN_THRESHOLD} matches"),
-        ('S', "Skip this search entirely"),
-    ]
-
-    console.print(f"\n[bold yellow]Search '{query}' in {rel_path} matched {hit_count} line(s).[/bold yellow]")
-    console.print(
-        f"With {SEARCH_CONTEXT_LINES} lines of context in both directions this would expose "
-        f"{coverage * 100:.0f}% of the file ({total_lines} lines total)."
-    )
-    for key, label in options:
-        suffix = " [dim](default)[/dim]" if key == default_key else ""
-        console.print(f"  [cyan]{key}.[/cyan] {label}{suffix}")
-
-    choices = {'F': 'full', 'A': 'all', 'T': 'truncate', 'S': 'skip'}
-    for _ in range(5):
-        ans = console.input(f"[bold]Choice (F/A/T/S) \\[{default_key}]: [/bold]").strip().upper()
-        if not ans:
-            ans = default_key
-        if ans in choices:
-            return choices[ans]
-        console.print("[red]Please enter F, A, T or S, or press Enter for the default.[/red]")
-    return 'skip'
-
-
-def _run_single_search(query, rel_path, root_dir, use_regex, case_sensitive,
-                       found_files_final, important_files, partial_files):
-    """Searches one file and folds any hits into partial_files. Returns a report entry."""
-    abs_path = os.path.abspath(os.path.join(root_dir, rel_path))
-    if not os.path.isfile(abs_path):
-        return None
-    if abs_path in important_files:
-        # A full-file include already supersedes anything a blob could add.
-        return None
-
-    try:
-        content = safe_read_file(abs_path)
-    except Exception as e:
-        console.print(f"  [red]Could not read {rel_path}: {e}[/red]")
-        return None
-    if not content or content.startswith("(This is a binary"):
-        return None
-
-    hits = find_search_hits(content, query, regex=use_regex, case_sensitive=case_sensitive)
-    if not hits:
-        return None
-
-    total_lines = len(content.splitlines()) or 1
-    blocks = build_search_blocks(hits, query)
-    coverage = partial_coverage_ratio(total_lines, blocks)
-    truncated = 0
-
-    if len(hits) > SEARCH_HIT_WARN_THRESHOLD or coverage >= SEARCH_COVERAGE_WARN_RATIO:
-        choice = _confirm_large_search(query, rel_path, len(hits), coverage, total_lines)
-        if choice == 'skip':
-            return {"query": query, "path": rel_path, "hits": len(hits),
-                    "truncated": 0, "note": "skipped by the user"}
-        if choice == 'full':
-            if abs_path not in found_files_final:
-                found_files_final.append(abs_path)
-            if abs_path not in important_files:
-                important_files.append(abs_path)
-            partial_files.pop(abs_path, None)
-            console.print(f"  Search promoted [cyan]{rel_path}[/cyan] to a full-file include.")
-            return {"query": query, "path": rel_path, "hits": len(hits),
-                    "truncated": 0, "note": "the whole file was included instead of context blocks"}
-        if choice == 'truncate':
-            truncated = len(hits) - SEARCH_HIT_WARN_THRESHOLD
-            hits = hits[:SEARCH_HIT_WARN_THRESHOLD]
-            blocks = build_search_blocks(hits, query)
-
-    if abs_path not in found_files_final:
-        found_files_final.append(abs_path)
-    existing = partial_files.setdefault(abs_path, [])
-    existing_names = {b["name"] for b in existing}
-    for b in blocks:
-        if b["name"] not in existing_names:
-            existing.append(b)
-
-    console.print(
-        f"  Search '[yellow]{query}[/yellow]' in [cyan]{rel_path}[/cyan]: "
-        f"{len(hits)} hit(s) with {SEARCH_CONTEXT_LINES} lines of context each side."
-    )
-    return {"query": query, "path": rel_path, "hits": len(hits),
-            "truncated": truncated, "note": ""}
-
-
-def resolve_search_requests(search_list, resolved_map, scanned_files, root_dir,
-                            found_files_final, important_files, partial_files):
-    """Runs every SELECT search entry, returning a report for the model."""
-    report = []
-    if not search_list:
-        return report
-
-    for entry in search_list:
-        if not isinstance(entry, dict):
-            continue
-        query = entry.get("query") or entry.get("string") or ""
-        if not query:
-            console.print("[yellow]Warning:[/yellow] A search entry had no 'query' and was skipped.")
-            continue
-
-        use_regex = bool(entry.get("regex", False))
-        case_sensitive = entry.get("case_sensitive", True) is not False
-
-        targets = _pick_search_targets(entry.get("path"), resolved_map, scanned_files, root_dir)
-        if not targets:
-            report.append({"query": query, "path": entry.get("path") or "(unresolved)",
-                           "hits": 0, "truncated": 0,
-                           "note": "the target file could not be resolved, so nothing was searched"})
-            continue
-
-        searched = 0
-        matched = 0
-        aborted = False
-        for rel_path in targets:
-            try:
-                result = _run_single_search(
-                    query, rel_path, root_dir, use_regex, case_sensitive,
-                    found_files_final, important_files, partial_files
-                )
-            except ValueError as e:
-                console.print(f"  [red]{e}[/red]")
-                report.append({"query": query, "path": entry.get("path") or "(multiple)",
-                               "hits": 0, "truncated": 0, "note": str(e)})
-                aborted = True
-                break
-            searched += 1
-            if result:
-                matched += 1
-                report.append(result)
-
-        if aborted:
-            continue
-        if len(targets) > 1:
-            console.print(
-                f"  [dim]Searched {searched} file(s) for '{query}'; "
-                f"{matched} contained a match.[/dim]"
-            )
-        if matched == 0:
-            where = entry.get("path") or f"{searched} scanned file(s)"
-            report.append({"query": query, "path": where, "hits": 0,
-                           "truncated": 0, "note": "no matches found"})
-    return report
-
-
-def build_search_note(search_report):
-    """Formats the search outcome so the model knows what was and was not found."""
-    if not search_report:
-        return ""
-    lines = ["\n--- SYSTEM NOTE: SEARCH RESULTS ---"]
-    for r in search_report:
-        line = f"- '{r['query']}' in {r['path']}: {r['hits']} match(es)"
-        if r.get("truncated"):
-            line += (f", TRUNCATED. {r['truncated']} further match(es) were withheld by the user. "
-                     f"Narrow your query and search again if you need the rest.")
-        elif r.get("note"):
-            line += f" ({r['note']})"
-        else:
-            line += f", shown with {SEARCH_CONTEXT_LINES} lines of context on each side."
-        lines.append(line)
-    lines.append("Matches whose context windows overlapped were merged into a single block, "
-                 "so the block count may be lower than the match count.")
-    lines.append("")
-    return "\n".join(lines)
-
-
-def resolve_selection_payload(selection_data, root_dir, max_depth, ext_filters, exclude_dirs):
+def resolve_selection_payload(selection_data, root_dir, max_depth, ext_filters, exclude_dirs, search_options=None):
     found_files = []
     important_files = []
     partial_files = {}
@@ -310,11 +97,17 @@ def resolve_selection_payload(selection_data, root_dir, max_depth, ext_filters, 
     for entry in functions_list:
         if entry.get("path"):
             req_paths.add(entry.get("path"))
-    # Search targets go through the exact same resolver as everything else, so
-    # they inherit suffix/basename matching and the ambiguity prompt for free.
+    # A search path naming a folder is scoped to every scanned file beneath it.
+    # Folders never reach the file resolver, which would report them missing.
+    folder_scopes, folder_files = split_folder_searches(search_list, scanned_files, root_dir)
+    # File search targets go through the exact same resolver as everything
+    # else, so they inherit suffix/basename matching and the ambiguity prompt.
     for entry in search_list:
-        if isinstance(entry, dict) and entry.get("path"):
-            req_paths.add(entry.get("path"))
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get("path")
+        if isinstance(path, str) and path and path not in folder_scopes:
+            req_paths.add(path)
     resolved_map, ambiguous_map, missing_list = resolve_paths(req_paths, scanned_files, root_dir)
     resolved_map = {k: [v] for k, v in resolved_map.items()}
 
@@ -470,12 +263,44 @@ def resolve_selection_payload(selection_data, root_dir, max_depth, ext_filters, 
         for uf in unfound_funcs:
             console.print(f"  [yellow]Warning:[/yellow] Function/Class '[red]{uf}[/red]' could not be found anywhere in the workspace.")
 
-    search_report = resolve_search_requests(
-        search_list, resolved_map, scanned_files, root_dir,
-        found_files_final, important_files, partial_files
+    search_map = dict(resolved_map)
+    search_map.update(folder_files)
+    search_context = SearchContext(
+        root_dir=root_dir,
+        scanned_files=scanned_files,
+        resolved_map=search_map,
+        found_files=found_files_final,
+        important_files=important_files,
+        partial_files=partial_files,
+        folder_scopes=folder_scopes,
     )
+    search_report = resolve_search_requests(search_list, search_context, search_options or SearchOptions())
 
     return found_files_final, important_files, partial_files, missing_files_warnings, search_report
+
+def _copy_selection_notes(missing_files, search_report):
+    """Copies only the notes when a SELECT payload produced no files at all.
+
+    A rejected or empty search must still reach the model, or it never learns
+    why nothing came back. Returns True when there was something to copy.
+    """
+    parts = []
+    if missing_files:
+        parts.append("--- SYSTEM NOTE: MISSING FILES ---")
+        parts.append("The following files were requested but could not be found or resolved in the workspace:")
+        parts.extend(f"- {path}" for path in missing_files)
+    search_note = build_search_note(search_report)
+    if search_note:
+        parts.append(search_note)
+    if not parts:
+        return False
+    if copy_to_clipboard("\n".join(parts)):
+        console.print(Panel(
+            "[bold yellow]No files were selected, so only the selection notes were copied to the clipboard.[/bold yellow]",
+            border_style="yellow"
+        ))
+    return True
+
 
 def manage_tasks_cli(tasks_data, root_dir, max_depth, ext_filters, exclude_dirs, args, custom_rules):
     import json
@@ -537,7 +362,7 @@ def manage_tasks_cli(tasks_data, root_dir, max_depth, ext_filters, exclude_dirs,
                     "files": selected_task.get("files", []),
                     "functions": selected_task.get("functions", [])
                 }
-                res = resolve_selection_payload(sel_data, root_dir, max_depth, ext_filters, exclude_dirs)
+                res = resolve_selection_payload(sel_data, root_dir, max_depth, ext_filters, exclude_dirs, search_options=SearchOptions.from_args(args))
                 if res[0] is None:
                     continue
                 found_files, imp_files, part_files, missing, task_search_report = res
@@ -744,6 +569,9 @@ def main():
     add_toggle("--file", help_text="Save prompt to a temp file and copy the file to clipboard")
     add_toggle("--file-culling", "--file-cull", dest="file_culling", help_text="Enable file culling / AST selection mode")
     add_toggle("-js", "--json-select", dest="json_select", help_text="Parse a JSON selection payload from clipboard to automatically select files/functions")
+    add_toggle("--search-confirm", dest="search_confirm", help_text="Ask per file how to handle oversized search results instead of taking the default automatically.")
+    parser.add_argument("--search-max-files", type=int, default=None, help="Files one search query may match before you must accept, narrow or reject it.")
+    parser.add_argument("--search-max-tokens", type=int, default=None, help="Tokens one search query may match before you must accept, narrow or reject it.")
     add_toggle("-x", "--xml", help_text="Instruct the AI to use XML for payloads instead of JSON to completely avoid quote escaping issues.")
     add_toggle("--consult", help_text="Enable the CONSULT phase, letting the AI ask anonymised knowledge questions of a larger external LLM.")
     parser.add_argument("--consult-transport", choices=("clipboard", "file", "both"), default=None, help="How consult questions and answers travel: clipboard, file (via ~/.cc_consult), or both.")
@@ -785,6 +613,9 @@ def main():
     active = resolve_settings(args, settings)
     if active:
         console.print(f"[dim]Settings in effect: {describe_active(active)}[/dim]")
+    for flag, value in (("--search-max-files", args.search_max_files), ("--search-max-tokens", args.search_max_tokens)):
+        if value < 1:
+            parser.error(f"{flag} must be 1 or greater, got {value}.")
 
     if args.mobile_doctor:
         run_doctor(console)
@@ -979,13 +810,14 @@ def main():
                 return
 
             console.print("[green]Found valid JSON selection payload.[/green]")
-            res = resolve_selection_payload(selection_data, root_dir, max_depth, ext_filters, args.exclude)
+            res = resolve_selection_payload(selection_data, root_dir, max_depth, ext_filters, args.exclude, search_options=SearchOptions.from_args(args))
             if res[0] is None:
                 return
             found_files, important_files, partial_files, missing_files_warnings, search_report = res
             
             if not found_files:
-                console.print("[bold red]No files were successfully selected from the payload.[/bold red]")
+                if not _copy_selection_notes(missing_files_warnings, search_report):
+                    console.print("[bold red]No files were successfully selected from the payload.[/bold red]")
                 return
             
             all_known_files = list(found_files)

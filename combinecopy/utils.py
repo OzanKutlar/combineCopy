@@ -333,6 +333,43 @@ def partial_coverage_ratio(total_lines: int, blocks: list[dict]) -> float:
     return min(1.0, covered / total_lines)
 
 
+_TOKEN_ENCODER = None
+_TOKEN_ENCODER_LOADED = False
+
+
+def _load_token_encoder():
+    """Loads tiktoken's cl100k_base encoder once. Returns None when unavailable."""
+    global _TOKEN_ENCODER, _TOKEN_ENCODER_LOADED
+    if not _TOKEN_ENCODER_LOADED:
+        _TOKEN_ENCODER_LOADED = True
+        try:
+            import tiktoken
+            _TOKEN_ENCODER = tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            # tiktoken is optional, and can also fail to fetch its encoding
+            # while offline. estimate_tokens falls back to a character count.
+            _TOKEN_ENCODER = None
+    return _TOKEN_ENCODER
+
+
+def estimate_tokens(text: str) -> tuple[int, bool]:
+    """Returns (token_count, is_estimate) for text.
+
+    Uses tiktoken when it is installed. Otherwise counts roughly four
+    characters per token and reports the result as an estimate.
+    """
+    if not isinstance(text, str) or not text:
+        return 0, False
+    encoder = _load_token_encoder()
+    if encoder is not None:
+        try:
+            return len(encoder.encode(text, disallowed_special=())), False
+        except Exception:
+            # Fall through to the estimate rather than failing the search.
+            pass
+    return max(1, len(text) // 4), True
+
+
 def render_partial_content(content: str, blocks: list[dict]) -> str:
     """Renders only the padded windows around `blocks`, with line-numbered gaps.
 
