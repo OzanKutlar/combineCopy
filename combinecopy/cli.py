@@ -549,7 +549,8 @@ def manage_tasks_cli(tasks_data, root_dir, max_depth, ext_filters, exclude_dirs,
                         continue
                     found_files, imp_files, part_files = selected
                 agent_type = "cli" if getattr(args, 'cli', False) else "default"
-                sys_prompt_text = get_system_prompt(agent_type=agent_type, file_cull=True, xml_mode=args.xml, consult=args.consult, custom_rules=custom_rules, rehab=args.rehab, divide=False, prune=args.prune)
+                identity_val = getattr(args, 'identity', 'antigravity')
+                sys_prompt_text = get_system_prompt(agent_type=agent_type, file_cull=True, xml_mode=args.xml, consult=args.consult, custom_rules=custom_rules, rehab=args.rehab, divide=False, prune=args.prune, identity=identity_val)
                 file_context_buffer = []
                 separator = "-" * 35
                 important_set = set(imp_files) if imp_files is not None else set()
@@ -592,7 +593,7 @@ def manage_tasks_cli(tasks_data, root_dir, max_depth, ext_filters, exclude_dirs,
                 if getattr(args, 'prune', False):
                     file_context_buffer.append("\n--- SYSTEM NOTE: CONTEXT PRUNING ---")
                     from combinecopy.prompts import get_prune
-                    file_context_buffer.append(get_prune(args.xml))
+                    file_context_buffer.append(get_prune(args.xml, identity=identity_val))
                     file_context_buffer.append("")
 
                 file_context_str = "\n".join(file_context_buffer)
@@ -610,7 +611,8 @@ def manage_tasks_cli(tasks_data, root_dir, max_depth, ext_filters, exclude_dirs,
                     git_diff="",
                     rehab=args.rehab,
                     divide=False,
-                    prune=args.prune
+                    prune=args.prune,
+                    identity=identity_val
                 )
 
                 copy_to_clipboard(full_text)
@@ -695,6 +697,7 @@ def main():
     parser.add_argument("--system", nargs='?', const='DEFAULT', default=None, help="Inject system prompt and user instructions. Optionally provide a path to a custom system prompt file.")
     parser.add_argument("--no-system", action="store_const", const=False, dest="system", help="Never inject the system prompt, overriding the saved setting.")
     parser.add_argument("--system-only", action="store_true", help="Copy only the system prompt to the clipboard and exit.")
+    parser.add_argument("--identity", type=str, default=None, help="AI identity in the system prompt (e.g. antigravity, claude, gemini, chatgpt, neutral, dynamic, or custom text).")
     add_toggle("--file", help_text="Save prompt to a temp file and copy the file to clipboard")
     add_toggle("--file-culling", "--file-cull", dest="file_culling", help_text="Enable file culling / AST selection mode")
     add_toggle("-js", "--json-select", dest="json_select", help_text="Parse a JSON selection payload from clipboard to automatically select files/functions")
@@ -771,7 +774,7 @@ def main():
             console.print(f"[dim yellow]Warning: Could not read .ccrules file: {e}[/dim yellow]")
     if args.system_only:
         agent_type = "cli" if args.cli else "default"
-        sys_prompt = get_system_prompt(agent_type=agent_type, file_cull=args.file_culling, xml_mode=args.xml, consult=args.consult, custom_rules=custom_rules, rehab=args.rehab, divide=args.divide, prune=args.prune)
+        sys_prompt = get_system_prompt(agent_type=agent_type, file_cull=args.file_culling, xml_mode=args.xml, consult=args.consult, custom_rules=custom_rules, rehab=args.rehab, divide=args.divide, prune=args.prune, identity=args.identity)
         important = get_system_prompt_important(agent_type=agent_type, xml_mode=args.xml, divide=args.divide, consult=args.consult)
         
         full_sys_prompt = f"--- SYSTEM INSTRUCTIONS ---\n{sys_prompt}\n\n{important}"
@@ -1014,7 +1017,7 @@ def main():
             console.print("[bold cyan]Phase: Instruction & System Prompt[/bold cyan]")
             sys_arg = args.system if args.system else 'DEFAULT'
             if sys_arg == 'DEFAULT' or sys_arg == '':
-                sys_prompt_text = get_system_prompt(agent_type=agent_type, file_cull=args.file_culling, xml_mode=args.xml, consult=args.consult, custom_rules=custom_rules, rehab=args.rehab, divide=args.divide, prune=args.prune)
+                sys_prompt_text = get_system_prompt(agent_type=agent_type, file_cull=args.file_culling, xml_mode=args.xml, consult=args.consult, custom_rules=custom_rules, rehab=args.rehab, divide=args.divide, prune=args.prune, identity=args.identity)
             else:
                 try:
                     with open(sys_arg, 'r', encoding='utf-8') as f:
@@ -1174,7 +1177,7 @@ def main():
                     if args.json_select and getattr(args, 'prune', False):
                         from combinecopy.prompts import get_prune
                         file_context_buffer.append("\n--- SYSTEM NOTE: CONTEXT PRUNING ---")
-                        file_context_buffer.append(get_prune(args.xml))
+                        file_context_buffer.append(get_prune(args.xml, identity=args.identity))
                         file_context_buffer.append("")
                     file_context_str = "\n".join(file_context_buffer)
                     ast_map_str = generate_tree_string(found_files, root_dir) if args.file_culling else ""
@@ -1193,7 +1196,8 @@ def main():
                             rehab=args.rehab,
                             divide=args.divide,
                             prune=args.prune,
-                            tfs_mode=args.tfs
+                            tfs_mode=args.tfs,
+                            identity=args.identity
                         )
                     else:
                         parts = []

@@ -128,7 +128,7 @@ def extract_consult_payload(content: str, prefer_xml: bool = False):
 
 
 def _first_xml_payload(content: str):
-    if 'antigravity_payload' not in content:
+    if '_payload>' not in content:
         return None
     for xml_str in extract_xml_from_text(content):
         data = parse_xml_to_dict(xml_str)

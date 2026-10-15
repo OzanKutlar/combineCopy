@@ -34,9 +34,12 @@ def analyze_payload(text: str) -> tuple[bool, str]:
     if not stripped:
         return False, "Buffer is empty."
 
-    if "<antigravity_payload>" in stripped:
-        if "</antigravity_payload>" not in stripped:
-            return False, "Missing closing </antigravity_payload> - the paste was likely truncated."
+    import re
+    xml_open = re.search(r'<([a-zA-Z0-9_]+_payload)>', stripped)
+    if xml_open:
+        tag_name = xml_open.group(1)
+        if f"</{tag_name}>" not in stripped:
+            return False, f"Missing closing </{tag_name}> - the paste was likely truncated."
         return True, "XML payload looks complete."
 
     first = stripped.find("{")

@@ -137,6 +137,7 @@ The `off` word is only consumed when it appears on its own immediately after the
 | `--select` | Launch the interactive TUI selector to manually filter the context payload. | false | -s |
 | `--system` | Launch a TUI to inject system prompts and user instructions. Accepts an optional path to a custom text file. | none | none |
 | `--no-system` | Never inject the system prompt, overriding the saved setting. | false | none |
+| `--identity <name>` | Set the AI persona in the system prompt (`antigravity`, `claude`, `gemini`, `chatgpt`, `neutral`, `dynamic` for `{{IDENTITY}}`, or custom text). | `antigravity` | none |
 | `--prompt-cli`, `--prompt-tui` | Choose terminal input or Textual TUI for the system prompt request area. | tui | none |
 | `--apply-cli`, `--apply-tui` | Choose terminal interface or Textual TUI for the apply listener. | tui | none |
 | `--apply-chain` | Allow several apply-listener commands on one line, e.g. `5m` or `ac`. | false | none |
@@ -336,6 +337,7 @@ When any setting differs from its built-in default, a dim one-line banner names 
 | `web_apply` | on/off | off | Enable web macro mode |
 | `mobile` | auto/on/off | auto | `auto` detects Termux |
 | `system` | on/off/path | off | Always inject the system prompt, or point at a custom one |
+| `identity` | text | `antigravity` | AI persona in the system prompt (`antigravity`, `claude`, `gemini`, `chatgpt`, `neutral`, `dynamic` for `{{IDENTITY}}`, or custom text) |
 | `limit` | number | 100 | Maximum scan depth |
 | `batches` | number | 1 | Default batch count |
 | `file_types` | list | none | Default extension filter |

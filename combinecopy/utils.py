@@ -446,20 +446,38 @@ def normalize_newlines(text: str, newline: str = "\n") -> str:
     unified = text.replace("\r\n", "\n").replace("\r", "\n")
     return unified if newline == "\n" else unified.replace("\n", newline)
 
+def has_xml_payload_tag(text: str) -> bool:
+    """True when text contains an XML payload root tag like <antigravity_payload> or <agent_payload>."""
+    if not isinstance(text, str) or "_payload>" not in text:
+        return False
+    return bool(re.search(r'<[a-zA-Z0-9_]+_payload>', text))
+
+
 def extract_xml_from_text(text: str) -> list[str]:
-    """Extracts XML antigravity payloads from text."""
-    results = []
-    import re
-    code_blocks = re.findall(r'```(?:xml)?\s*(<antigravity_payload>.*?</antigravity_payload>)\s*```', text, re.DOTALL | re.IGNORECASE)
+    """Extracts XML agent payloads (<*_payload>...</*_payload>) from text."""
+    if not isinstance(text, str) or "_payload>" not in text:
+        return []
+    code_blocks = [
+        match.group(1)
+        for match in re.finditer(
+            r'```(?:xml)?\s*(<([a-zA-Z0-9_]+_payload)>.*?</\2>)\s*```',
+            text,
+            re.DOTALL | re.IGNORECASE,
+        )
+    ]
     if code_blocks:
         return code_blocks
-        
+
     # Fallback heuristic
-    start_idx = text.find('<antigravity_payload>')
-    end_idx = text.rfind('</antigravity_payload>')
-    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-        results.append(text[start_idx:end_idx+22])
-    return results
+    raw_blocks = [
+        match.group(1)
+        for match in re.finditer(
+            r'(<([a-zA-Z0-9_]+_payload)>.*?</\2>)',
+            text,
+            re.DOTALL | re.IGNORECASE,
+        )
+    ]
+    return raw_blocks
 def find_line_number(full_text: str, search_text: str) -> int:
     """Finds the 1-based line number of the target block for editor launching."""
     if not search_text: return 1

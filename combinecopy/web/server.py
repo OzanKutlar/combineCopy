@@ -106,13 +106,18 @@ def generate():
             file_context_buffer.append("[File not found]")
         file_context_buffer.append("```\n")
 
+    from combinecopy.settings import load_settings
+    saved_identity = load_settings().get("identity") or "antigravity"
+    identity_val = req_data.get("identity") or saved_identity
+
     prompt = build_prompt(
         user_request=user_req,
         file_context="\n".join(file_context_buffer),
         ast_map=ast_map,
         file_cull=True,
         system_prompt="",
-        agent_type="default"
+        agent_type="default",
+        identity=identity_val
     )
 
     return jsonify({"prompt": prompt})

@@ -134,7 +134,7 @@ class ApplyCliSession:
             return None, None, None
 
         # XML check
-        if '<antigravity_payload>' in content:
+        if '_payload>' in content:
             xml_blocks = extract_xml_from_text(content)
             for xml_str in xml_blocks:
                 data = parse_xml_to_dict(xml_str)

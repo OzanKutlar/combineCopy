@@ -41,6 +41,7 @@ DEFAULTS = {
     'web_apply': ('bool', False, 'Enable web macro mode'),
     'mobile': ('nullable-bool', None, 'Mobile mode (auto = detect Termux)'),
     'system': ('bool-or-str', False, 'Always inject the system prompt, or a path to a custom one'),
+    'identity': ('str', 'antigravity', 'AI persona in the system prompt (antigravity, claude, gemini, chatgpt, neutral, dynamic, or custom)'),
     'limit': ('int', 100, 'Maximum recursion depth for directory scans'),
     'batches': ('int', 1, 'Number of batches to split large copies into'),
     'file_types': ('list', [], 'Default file extensions to include'),
@@ -186,6 +187,10 @@ def _coerce(key, value):
     if kind == 'list':
         if isinstance(value, list) and all(isinstance(item, str) for item in value):
             return list(value)
+        return None
+    if kind == 'str':
+        if isinstance(value, str) and value.strip():
+            return value.strip()
         return None
     if kind == 'nullable-str':
         if value is None or isinstance(value, str):
@@ -336,6 +341,11 @@ def resolve_settings(args, settings):
             args.system = 'DEFAULT'
         elif isinstance(configured, str) and configured.strip():
             args.system = configured
+
+    if getattr(args, 'identity', None) is None or not str(args.identity).strip():
+        args.identity = settings.get('identity') or 'antigravity'
+    else:
+        args.identity = str(args.identity).strip()
 
     args.editor = settings.get('editor')
     return active_settings(settings)

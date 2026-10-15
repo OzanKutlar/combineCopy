@@ -1,8 +1,61 @@
-IDENTITY_DEFAULT = r"""<identity>
-You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.
-You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.
-The USER will send you requests, which you must always prioritize addressing. The USER will provide all necessary file contents, context, and environment state directly in the prompt.
-</identity>"""
+IDENTITY_BODY = (
+    "You are pair programming with a USER to solve their coding task. "
+    "The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.\n"
+    "The USER will send you requests, which you must always prioritize addressing. "
+    "The USER will provide all necessary file contents, context, and environment state directly in the prompt."
+)
+
+DYNAMIC_IDENTITY_PLACEHOLDER = "{{IDENTITY}}"
+
+IDENTITY_PRESETS = {
+    "antigravity": "You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.",
+    "claude": "You are Claude, a powerful agentic AI coding assistant created by Anthropic.",
+    "gemini": "You are Gemini, a powerful agentic AI coding assistant created by Google.",
+    "chatgpt": "You are ChatGPT, a powerful agentic AI coding assistant created by OpenAI.",
+    "openai": "You are ChatGPT, a powerful agentic AI coding assistant created by OpenAI.",
+    "codex": "You are Codex, a powerful agentic AI coding assistant created by OpenAI.",
+    "neutral": "You are a powerful agentic AI coding assistant.",
+    "generic": "You are a powerful agentic AI coding assistant.",
+    "assistant": "You are a powerful agentic AI coding assistant.",
+    "dynamic": f"You are {DYNAMIC_IDENTITY_PLACEHOLDER}, a powerful agentic AI coding assistant.",
+    "placeholder": f"You are {DYNAMIC_IDENTITY_PLACEHOLDER}, a powerful agentic AI coding assistant.",
+}
+
+IDENTITY_DEFAULT = f"<identity>\n{IDENTITY_PRESETS['antigravity']}\n{IDENTITY_BODY}\n</identity>"
+
+
+def resolve_identity_line(identity: str | None = "antigravity") -> str:
+    """Resolves an identity setting or custom string into the opening persona line."""
+    raw = (identity or "antigravity").strip()
+    if not raw:
+        raw = "antigravity"
+    lowered = raw.lower()
+    if lowered in IDENTITY_PRESETS:
+        return IDENTITY_PRESETS[lowered]
+    if lowered.startswith("you are ") or lowered.startswith("<identity>"):
+        return raw
+    return f"You are {raw}, a powerful agentic AI coding assistant."
+
+
+def resolve_xml_root_tag(identity: str | None = "antigravity") -> str:
+    """Returns a clean XML root tag matching the active identity."""
+     import re
+    raw = (identity or "antigravity").strip().lower()
+    if not raw or raw == "antigravity":
+        return "antigravity_payload"
+    if raw in ("neutral", "generic", "assistant", "dynamic", "placeholder"):
+        return "agent_payload"
+    slug = re.sub(r"[^a-z0-9_]+", "_", raw).strip("_")
+    if not slug or slug[0].isdigit() or len(slug) > 24:
+        return "agent_payload"
+    return f"{slug}_payload"
+
+
+def _apply_xml_root(text: str, identity: str | None = "antigravity") -> str:
+    root = resolve_xml_root_tag(identity)
+    if root == "antigravity_payload":
+        return text
+    return text.replace("antigravity_payload", root)
 
 MODE_DESCRIPTIONS_HEADER = r"""<mode_descriptions>
 You operate across three core phases of work. Clearly communicate to the user which phase you are currently in:"""
@@ -556,13 +609,17 @@ You must adhere to the following high-reliability coding standards, inspired by 
 </communication_style>"""
 
 # --- Modular Builder Functions ---
-def get_introduction(agent_type: str = "default") -> str:
-    return IDENTITY_DEFAULT
+def get_introduction(agent_type: str = "default", identity: str = "antigravity") -> str:
+    line = resolve_identity_line(identity)
+    if line.startswith("<identity>") and line.endswith("</identity>"):
+        return line
+    return f"<identity>\n{line}\n{IDENTITY_BODY}\n</identity>"
+
 def get_planning(agent_type: str = "default") -> str:
     return PLANNING_DEFAULT
 
-def get_file_cull(xml_mode: bool = False) -> str:
-    return FILE_CULLING_XML if xml_mode else FILE_CULLING
+def get_file_cull(xml_mode: bool = False, identity: str = "antigravity") -> str:
+    return _apply_xml_root(FILE_CULLING_XML, identity) if xml_mode else FILE_CULLING
 
 PRUNE_DEFAULT = r"""<prune_instructions>
 Managing your context window is critical. Since you just selected these files, please evaluate if they are all strictly necessary.
@@ -604,8 +661,8 @@ Output the payload wrapped in a markdown code block:
 ```
 </prune_instructions>"""
 
-def get_prune(xml_mode: bool = False) -> str:
-    return PRUNE_XML if xml_mode else PRUNE_DEFAULT
+def get_prune(xml_mode: bool = False, identity: str = "antigravity") -> str:
+    return _apply_xml_root(PRUNE_XML, identity) if xml_mode else PRUNE_DEFAULT
 
 REHAB_LEVELS = ("explain", "quiz", "cloze")
 
@@ -734,8 +791,8 @@ def get_rehab(level="quiz", xml_mode: bool = False) -> str:
     return "\n\n".join(parts)
 
 
-def get_consult(xml_mode: bool = False) -> str:
-    return CONSULT_XML if xml_mode else CONSULT_DEFAULT
+def get_consult(xml_mode: bool = False, identity: str = "antigravity") -> str:
+    return _apply_xml_root(CONSULT_XML, identity) if xml_mode else CONSULT_DEFAULT
 
 _WANT_LABELS = {
     "snippet": "a minimal working snippet",
@@ -789,20 +846,20 @@ def build_external_consult_prompt(queries: list, xml_mode: bool = False, answer_
     for query in queries:
         lines.extend(_format_external_query(query))
     return "\n".join(lines)
-def get_execution(agent_type: str = "default", xml_mode: bool = False, consult: bool = False, divide: bool = False) -> str:
+def get_execution(agent_type: str = "default", xml_mode: bool = False, consult: bool = False, divide: bool = False, identity: str = "antigravity") -> str:
     parts = [MODE_DESCRIPTIONS_HEADER]
     if consult:
-        parts.append(get_consult(xml_mode))
+        parts.append(get_consult(xml_mode, identity=identity))
     if divide:
         parts.append(PLANNING_DIVIDE)
-        parts.append(TASK_DIVIDE_SYSTEM_XML if xml_mode else TASK_DIVIDE_SYSTEM)
+        parts.append(_apply_xml_root(TASK_DIVIDE_SYSTEM_XML, identity) if xml_mode else TASK_DIVIDE_SYSTEM)
     elif agent_type == "cli":
         parts.append(PLANNING_DEFAULT)
-        parts.append(EXECUTION_CLI_XML if xml_mode else EXECUTION_CLI)
+        parts.append(_apply_xml_root(EXECUTION_CLI_XML, identity) if xml_mode else EXECUTION_CLI)
         parts.append(VERIFICATION)
     else:
         parts.append(PLANNING_DEFAULT)
-        parts.append(EXECUTION_DEFAULT_XML if xml_mode else EXECUTION_DEFAULT)
+        parts.append(_apply_xml_root(EXECUTION_DEFAULT_XML, identity) if xml_mode else EXECUTION_DEFAULT)
         parts.append(VERIFICATION)
         
     parts.append("</mode_descriptions>")
@@ -855,19 +912,19 @@ def get_system_prompt_important(agent_type: str = "default", xml_mode: bool = Fa
     return "\n".join(lines)
 
 # --- Composition Functions ---
-def get_system_prompt(agent_type: str = "default", file_cull: bool = False, xml_mode: bool = False, consult: bool = False, custom_rules: str = "", rehab: bool = False, divide: bool = False, prune: bool = False) -> str:
+def get_system_prompt(agent_type: str = "default", file_cull: bool = False, xml_mode: bool = False, consult: bool = False, custom_rules: str = "", rehab: bool = False, divide: bool = False, prune: bool = False, identity: str = "antigravity") -> str:
     parts = []
-    parts.append(get_introduction(agent_type))
-    parts.append(get_execution(agent_type, xml_mode, consult, divide))  # get_execution already includes planning strings internally
+    parts.append(get_introduction(agent_type, identity=identity))
+    parts.append(get_execution(agent_type, xml_mode, consult, divide, identity=identity))  # get_execution already includes planning strings internally
     
     if rehab:
         parts.append(get_rehab(rehab, xml_mode))
         
     if file_cull:
-        parts.append(get_file_cull(xml_mode))
+        parts.append(get_file_cull(xml_mode, identity=identity))
 
     if prune:
-        parts.append(get_prune(xml_mode))
+        parts.append(get_prune(xml_mode, identity=identity))
         
     rest_str = get_rest(agent_type, custom_rules)
     if rest_str:
@@ -888,7 +945,8 @@ def build_prompt(
     rehab: bool = False,
     divide: bool = False,
     prune: bool = False,
-    tfs_mode: bool = False
+    tfs_mode: bool = False,
+    identity: str = "antigravity"
 ) -> str:
     parts = []
     
@@ -909,7 +967,7 @@ def build_prompt(
     if system_prompt:
         parts.append(f"--- SYSTEM INSTRUCTIONS ---\n{system_prompt}")
     else:
-        parts.append(f"--- SYSTEM INSTRUCTIONS ---\n{get_system_prompt(agent_type, file_cull, xml_mode, consult, custom_rules, rehab, divide, prune)}")
+        parts.append(f"--- SYSTEM INSTRUCTIONS ---\n{get_system_prompt(agent_type, file_cull, xml_mode, consult, custom_rules, rehab, divide, prune, identity=identity)}")
         
     if user_request:
         parts.append(get_user_prompt(user_request, reminder=True))

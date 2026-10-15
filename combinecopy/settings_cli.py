@@ -134,10 +134,51 @@ def _prompt_editor(console, current):
     return current
 
 
+_IDENTITY_PRESETS = (
+    ('antigravity', 'Antigravity (Google DeepMind default)'),
+    ('claude', 'Claude (Anthropic)'),
+    ('gemini', 'Gemini (Google)'),
+    ('chatgpt', 'ChatGPT (OpenAI)'),
+    ('neutral', 'Neutral (generic AI coding assistant, no vendor)'),
+    ('dynamic', 'Dynamic placeholder ({{IDENTITY}} for external apps)'),
+)
+
+
+def _prompt_identity(console, current):
+    """Interactive picker for the system prompt identity."""
+    console.print()
+    console.print('[bold cyan]Choose an identity preset, or enter a custom name / sentence / placeholder.[/bold cyan]')
+    console.print(f"[dim]Current: {current if current else 'antigravity'}[/dim]")
+    for position, (key, label) in enumerate(_IDENTITY_PRESETS, start=1):
+        console.print(f'  [cyan]{position}.[/cyan] {key:<12} [dim]{label}[/dim]')
+    console.print('  [cyan]c.[/cyan] Custom identity or placeholder [dim](e.g. DeepSeek, {{MY_AGENT}}, or a full sentence)[/dim]')
+
+    for _ in range(_MAX_ATTEMPTS):
+        answer = console.input('[bold]Identity (Enter to keep): [/bold]').strip()
+        if not answer:
+            return current
+        lowered = answer.lower()
+        if lowered == 'c':
+            custom = console.input('[bold]Custom identity string: [/bold]').strip()
+            return custom if custom else current
+        if answer.isdigit():
+            index = int(answer) - 1
+            if 0 <= index < len(_IDENTITY_PRESETS):
+                return _IDENTITY_PRESETS[index][0]
+            console.print('[red]That number is not in the list.[/red]')
+            continue
+        return answer
+
+    console.print('[yellow]Too many invalid entries; the identity was left unchanged.[/yellow]')
+    return current
+
+
 def _prompt_value(console, key, current):
     kind = DEFAULTS[key][0]
     if key == 'editor':
         return _prompt_editor(console, current)
+    if key == 'identity':
+        return _prompt_identity(console, current)
     if kind == 'bool':
         return not bool(current)
     if kind == 'nullable-bool':
