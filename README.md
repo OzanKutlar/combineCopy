@@ -116,7 +116,7 @@ The `off` word is only consumed when it appears on its own immediately after the
 
 | Option | Description | Default | Alias |
 | :--- | :--- | :--- | :--- |
-| `paths` | Specific files, directories, or `.zip` archives to include. Bypasses the full directory scan if provided. | none | none |
+| `paths` | Specific files, directories, `.zip` archives, glob patterns (e.g. `*.py`, `Chapter 4*`), or random ranges (`${r(1, 50)}`) to include. Bypasses the full directory scan if provided. | none | none |
 
 ### Filtering & Output Control
 
@@ -243,6 +243,10 @@ combineCopy -f cs kt xml
 combineCopy .\combineCopy.py --system
 combineCopy .\architecture.svg --system
 combineCopy ".\Creative writing\Untitled Book\"
+
+# Target files using wildcard/glob patterns or random ranges
+combineCopy ".\My Skills Mutate\Chapter 46*" --system
+combineCopy ".\Stories\Chapter ${r(1, 20)}*"
 
 # Native ZIP file support (extracts and filters automatically)
 combineCopy .\FENS401_402_2026_FS2.zip -f tex bib

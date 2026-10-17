@@ -11,6 +11,7 @@ import shutil
 import random
 import re
 import subprocess
+import glob
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
 from rich.rule import Rule
@@ -504,7 +505,10 @@ def resolve_random_paths(paths: list[str]) -> list[str]:
             candidates = []
             for i in range(start, end + 1):
                 test_path = p.replace(match.group(0), str(i), 1)
-                if os.path.exists(test_path):
+                if glob.has_magic(test_path):
+                    matched = glob.glob(test_path, recursive=True)
+                    candidates.extend(matched)
+                elif os.path.exists(test_path):
                     candidates.append(test_path)
             
             if not candidates:
@@ -517,6 +521,20 @@ def resolve_random_paths(paths: list[str]) -> list[str]:
         else:
             resolved.append(p)
     return resolved
+
+def expand_glob_paths(paths: list[str]) -> list[str]:
+    resolved = []
+    for p in paths:
+        if glob.has_magic(p):
+            matches = glob.glob(p, recursive=True)
+            if matches:
+                resolved.extend(sorted(matches))
+            else:
+                resolved.append(p)
+        else:
+            resolved.append(p)
+    return resolved
+
 def main():
     # Rewrite `--xml off` into `--no-xml` before argparse can swallow a path.
     sys.argv[1:] = normalize_argv(sys.argv[1:])
@@ -674,6 +692,7 @@ def main():
 
     if args.paths:
         args.paths = resolve_random_paths(args.paths)
+        args.paths = expand_glob_paths(args.paths)
 
     root_dir = os.getcwd()
     max_depth = args.limit
@@ -843,6 +862,7 @@ def main():
                         with console.status(f"[bold green]Scanning directory: {p}...[/bold green]", spinner="dots"):
                             dir_files = get_files_recursive(target_path, 0, max_depth, ext_filters, exclude_dirs=args.exclude)
                             found_files.extend(dir_files)
+                            important_files.extend(dir_files)
                     else:
                         console.print(Panel(f"Path not found: {p}", title="Error", style="bold red"))
                         return
