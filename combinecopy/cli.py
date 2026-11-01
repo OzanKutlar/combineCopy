@@ -61,6 +61,7 @@ from combinecopy.apply_cli import run_apply_cli
 from combinecopy.mobile.env import is_termux
 from combinecopy.mobile.inbox import ensure_inbox_dir
 from combinecopy.mobile.provision import run_doctor, install_url_opener
+from combinecopy.prompt_pipe import PromptPipeError, read_piped_prompt
 
 from combinecopy.settings import (
     describe_active,
@@ -535,6 +536,34 @@ def expand_glob_paths(paths: list[str]) -> list[str]:
             resolved.append(p)
     return resolved
 
+def _read_prompt_pipe(parser, args):
+    """Returns the request piped in for --prompt-pipe, or None when the flag is off.
+
+    A piped run stands in for typing the request into the --system request
+    area, so flags that never reach that area are rejected up front.
+    """
+    if not args.prompt_pipe:
+        return None
+    conflicts = [
+        flag for flag, active in (
+            ('--system-only', args.system_only),
+            ('--no-system', args.system is False),
+            ('--settings', args.settings is not None),
+            ('--set', bool(args.set)),
+            ('--get', bool(args.get)),
+            ('--unset', bool(args.unset)),
+        )
+        if active
+    ]
+    if conflicts:
+        parser.error(f"--prompt-pipe cannot be combined with {', '.join(conflicts)}.")
+    try:
+        return read_piped_prompt()
+    except PromptPipeError as error:
+        from rich.markup import escape
+        console.print(f'[bold red]--prompt-pipe:[/bold red] {escape(str(error))}')
+        sys.exit(2)
+
 def main():
     # Rewrite `--xml off` into `--no-xml` before argparse can swallow a path.
     sys.argv[1:] = normalize_argv(sys.argv[1:])
@@ -616,7 +645,9 @@ def main():
     parser.add_argument("--mobile-doctor", action="store_true", help="Run environment checks for Termux mobile mode and exit.")
     parser.add_argument("--install-url-opener", action="store_true", help="Install the Termux share-sheet hook that drops shared text into ~/.cc_inbox, then exit.")
     parser.add_argument("--force", action="store_true", help="Allow destructive provisioning steps, e.g. overwriting an existing termux-url-opener.")
+    parser.add_argument("--prompt-pipe", action="store_true", help="Read the user request from stdin. Implies --system and skips the request area.")
     args = parser.parse_args()
+    piped_request = _read_prompt_pipe(parser, args)
 
     settings = load_settings(console)
 
@@ -631,6 +662,9 @@ def main():
     active = resolve_settings(args, settings)
     if active:
         console.print(f"[dim]Settings in effect: {describe_active(active)}[/dim]")
+    if piped_request is not None and args.system is None:
+        # A piped request stands in for the --system request area.
+        args.system = 'DEFAULT'
     for flag, value in (("--search-max-files", args.search_max_files), ("--search-max-tokens", args.search_max_tokens)):
         if value < 1:
             parser.error(f"{flag} must be 1 or greater, got {value}.")
@@ -923,7 +957,11 @@ def main():
                 except Exception as e:
                     console.print(f"[red]Error reading system prompt file: {e}[/red]")
                     return
-            if getattr(args, 'prompt_ui', 'tui') == 'cli':
+            if piped_request is not None:
+                # Same result as typing the request into the area and pressing send.
+                user_request_data = {"request": piped_request, "system": sys_prompt_text}
+                console.print(f"[cyan]ℹ[/cyan] Request read from stdin ({len(piped_request)} chars).")
+            elif getattr(args, 'prompt_ui', 'tui') == 'cli':
                 from combinecopy.cli_prompt import run_cli_prompt
                 user_request_data = run_cli_prompt(
                     root_dir,

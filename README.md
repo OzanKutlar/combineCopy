@@ -110,7 +110,7 @@ combineCopy --tfs on -f cs # explicitly on, even if the setting says otherwise
 The `off` word is only consumed when it appears on its own immediately after the flag, so `combineCopy --xml src/main.py` still treats the path as a path.
 
 > [!NOTE]
-> The one-shot flags `--system-only`, `--mobile-doctor`, `--install-url-opener`, `--rehab-review` and `--force` have no paired off switch, since they have no saved default to override.
+> The one-shot flags `--system-only`, `--prompt-pipe`, `--mobile-doctor`, `--install-url-opener`, `--rehab-review` and `--force` have no paired off switch, since they have no saved default to override.
 
 ### Path Targets
 
@@ -136,6 +136,7 @@ The `off` word is only consumed when it appears on its own immediately after the
 | :--- | :--- | :--- | :--- |
 | `--select` | Launch the interactive TUI selector to manually filter the context payload. | false | -s |
 | `--system` | Launch a TUI to inject system prompts and user instructions. Accepts an optional path to a custom text file. | none | none |
+| `--prompt-pipe` | Read the user request from stdin. Behaves like `--system` with that text typed into the request area and sent, so no TUI opens. Not meant to be combined with flags that open a TUI, such as `-s` or `--apply`. | false | none |
 | `--no-system` | Never inject the system prompt, overriding the saved setting. | false | none |
 | `--identity <name>` | Set the AI persona in the system prompt (`antigravity`, `claude`, `gemini`, `chatgpt`, `neutral`, `dynamic` for `{{IDENTITY}}`, or custom text). | `antigravity` | none |
 | `--prompt-cli`, `--prompt-tui` | Choose terminal input or Textual TUI for the system prompt request area. | tui | none |
@@ -259,6 +260,10 @@ combineCopy --file-cull -s
 
 # Complex mobile app / multi-language build with the apply listener
 combineCopy -f gradle kt xml -s --apply --system
+
+# Pipe the request in instead of typing it (implies --system, skips the request area)
+cat request.txt | combineCopy -f py --prompt-pipe
+Get-Content request.txt | combineCopy -f py --prompt-pipe
 ```
 
 ---
