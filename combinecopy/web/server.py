@@ -85,7 +85,6 @@ def generate():
     user_req = req_data.get("request", "")
     
     all_files = get_files_recursive(ROOT_DIR, 0, MAX_DEPTH, EXTENSIONS, EXCLUDE_DIRS)
-    ast_map = generate_tree_string(all_files, ROOT_DIR)
 
     file_context_buffer = []
     sep = "-" * 35
@@ -107,8 +106,12 @@ def generate():
         file_context_buffer.append("```\n")
 
     from combinecopy.settings import load_settings
-    saved_identity = load_settings().get("identity") or "antigravity"
+    saved_settings = load_settings()
+    saved_identity = saved_settings.get("identity") or "antigravity"
     identity_val = req_data.get("identity") or saved_identity
+    include_sigs = saved_settings.get("function_map", False)
+
+    ast_map = generate_tree_string(all_files, ROOT_DIR, include_signatures=include_sigs)
 
     prompt = build_prompt(
         user_request=user_req,

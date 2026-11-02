@@ -80,7 +80,7 @@ from combinecopy.settings_cli import (
 )
 
 
-def resolve_selection_payload(selection_data, root_dir, max_depth, ext_filters, exclude_dirs, search_options=None):
+def resolve_selection_payload(selection_data, root_dir, max_depth, ext_filters, exclude_dirs, search_options=None, function_map=False):
     found_files = []
     important_files = []
     partial_files = {}
@@ -90,9 +90,10 @@ def resolve_selection_payload(selection_data, root_dir, max_depth, ext_filters, 
     with console.status("[bold green]Scanning directory structure...[/bold green]", spinner="dots"):
         scanned_files = get_files_recursive(root_dir, 0, max_depth, ext_filters, exclude_dirs=exclude_dirs)
 
-    prime_ast_cache(root_dir, scanned_files)
-    full_files_list = selection_data.get("files", [])
     functions_list = selection_data.get("functions", [])
+    if functions_list or function_map:
+        prime_ast_cache(root_dir, scanned_files)
+    full_files_list = selection_data.get("files", [])
     search_list = selection_data.get("search", []) or []
 
     req_paths = set(full_files_list)
@@ -364,7 +365,7 @@ def manage_tasks_cli(tasks_data, root_dir, max_depth, ext_filters, exclude_dirs,
                     "files": selected_task.get("files", []),
                     "functions": selected_task.get("functions", [])
                 }
-                res = resolve_selection_payload(sel_data, root_dir, max_depth, ext_filters, exclude_dirs, search_options=SearchOptions.from_args(args))
+                res = resolve_selection_payload(sel_data, root_dir, max_depth, ext_filters, exclude_dirs, search_options=SearchOptions.from_args(args), function_map=getattr(args, 'function_map', False))
                 if res[0] is None:
                     continue
                 found_files, imp_files, part_files, missing, task_search_report = res
@@ -374,7 +375,7 @@ def manage_tasks_cli(tasks_data, root_dir, max_depth, ext_filters, exclude_dirs,
                     from combinecopy.utils import get_files_recursive
                     with console.status("[bold green]Scanning directory structure...[/bold green]", spinner="dots"):
                         scanned_files = get_files_recursive(root_dir, 0, max_depth, ext_filters, exclude_dirs=exclude_dirs)
-                    selected = run_file_selector(root_dir, scanned_files, ast_mode=True, preselected_files=found_files, preselected_partials=part_files)
+                    selected = run_file_selector(root_dir, scanned_files, ast_mode=getattr(args, 'function_map', False), preselected_files=found_files, preselected_partials=part_files)
                     if selected is None:
                         console.print("[bold yellow]Modification cancelled.[/bold yellow]")
                         continue
@@ -428,7 +429,7 @@ def manage_tasks_cli(tasks_data, root_dir, max_depth, ext_filters, exclude_dirs,
                     file_context_buffer.append("")
 
                 file_context_str = "\n".join(file_context_buffer)
-                ast_map_str = generate_tree_string(found_files, root_dir)
+                ast_map_str = generate_tree_string(found_files, root_dir, include_signatures=getattr(args, 'function_map', False))
                 full_text = build_prompt(
                     user_request=selected_task.get("sub_prompt", ""),
                     file_context=file_context_str,
@@ -615,6 +616,7 @@ def main():
     parser.add_argument("--identity", type=str, default=None, help="AI identity in the system prompt (e.g. antigravity, claude, gemini, chatgpt, neutral, dynamic, or custom text).")
     add_toggle("--file", help_text="Save prompt to a temp file and copy the file to clipboard")
     add_toggle("--file-culling", "--file-cull", dest="file_culling", help_text="Enable file culling / AST selection mode")
+    add_toggle("--function-map", dest="function_map", help_text="Extract function and class signatures into the AST map (slow on large repos)")
     add_toggle("-js", "--json-select", dest="json_select", help_text="Parse a JSON selection payload from clipboard to automatically select files/functions")
     add_toggle("--search-confirm", dest="search_confirm", help_text="Ask per file how to handle oversized search results instead of taking the default automatically.")
     parser.add_argument("--search-max-files", type=int, default=None, help="Files one search query may match before you must accept, narrow or reject it.")
@@ -863,7 +865,7 @@ def main():
                 return
 
             console.print("[green]Found valid JSON selection payload.[/green]")
-            res = resolve_selection_payload(selection_data, root_dir, max_depth, ext_filters, args.exclude, search_options=SearchOptions.from_args(args))
+            res = resolve_selection_payload(selection_data, root_dir, max_depth, ext_filters, args.exclude, search_options=SearchOptions.from_args(args), function_map=args.function_map)
             if res[0] is None:
                 return
             found_files, important_files, partial_files, missing_files_warnings, search_report = res
@@ -908,7 +910,7 @@ def main():
                 with console.status("[bold green]Scanning directory structure...[/bold green]", spinner="dots"):
                     found_files = get_files_recursive(root_dir, 0, max_depth, ext_filters, exclude_dirs=args.exclude)
             
-            if args.file_culling or args.select:
+            if (args.file_culling or args.select) and args.function_map:
                 from combinecopy.utils import prime_ast_cache
                 prime_ast_cache(root_dir, found_files)
                 
@@ -917,7 +919,7 @@ def main():
             partial_files = {}
             if args.select and found_files:
                 console.print("[bold cyan]Phase: Manual File Selection[/bold cyan]")
-                selected = run_file_selector(root_dir, found_files, ast_mode=args.file_culling)
+                selected = run_file_selector(root_dir, found_files, ast_mode=(args.file_culling and args.function_map))
                 if selected is None:
                     console.print(Panel("Selection cancelled.", title="Cancelled", style="bold yellow"))
                     return
@@ -973,7 +975,7 @@ def main():
                     max_depth=max_depth,
                     ext_filters=ext_filters,
                     exclude_dirs=args.exclude,
-                    ast_mode=args.file_culling
+                    ast_mode=(args.file_culling and args.function_map)
                 )
             else:
                 app = SystemPromptApp(
@@ -1116,7 +1118,7 @@ def main():
                         file_context_buffer.append(get_prune(args.xml, identity=args.identity))
                         file_context_buffer.append("")
                     file_context_str = "\n".join(file_context_buffer)
-                    ast_map_str = generate_tree_string(found_files, root_dir) if args.file_culling else ""
+                    ast_map_str = generate_tree_string(found_files, root_dir, include_signatures=args.function_map) if args.file_culling else ""
                     if batch_count == 1 and user_request_data:
                         full_text = build_prompt(
                             user_request=user_request_data["request"],

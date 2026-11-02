@@ -1218,8 +1218,8 @@ def get_files_recursive(directory, current_depth, max_depth, extensions, exclude
             
     return file_list
 
-def generate_tree_string(files, root_dir) -> str:
-    """Generates a string representation of the directory tree, enriched with AST signatures."""
+def generate_tree_string(files, root_dir, include_signatures: bool = False) -> str:
+    """Generates a string representation of the directory tree, enriched with AST signatures if enabled."""
     tree_dict = {}
     for f in files:
         rel_path = os.path.relpath(f, root_dir).replace("\\", "/")
@@ -1231,11 +1231,12 @@ def generate_tree_string(files, root_dir) -> str:
             current = current[part]
             
     signatures_map = {}
-    for f in files:
-        sigs = get_cached_signatures(f, root_dir)
-        if sigs:
-            rel_path = os.path.relpath(f, root_dir).replace("\\", "/")
-            signatures_map[rel_path] = sigs
+    if include_signatures:
+        for f in files:
+            sigs = get_cached_signatures(f, root_dir)
+            if sigs:
+                rel_path = os.path.relpath(f, root_dir).replace("\\", "/")
+                signatures_map[rel_path] = sigs
 
     lines = []
     def _build_lines(node, prefix="", path_prefix=""):
@@ -1248,12 +1249,13 @@ def generate_tree_string(files, root_dir) -> str:
             current_path = f"{path_prefix}/{key}" if path_prefix else key
             
             if not node[key]:
-                sigs = signatures_map.get(current_path, [])
-                extension = "    " if is_last else "│   "
-                for j, sig in enumerate(sigs):
-                    sig_is_last = (j == len(sigs) - 1)
-                    sig_connector = "└── " if sig_is_last else "├── "
-                    lines.append(prefix + extension + sig_connector + "[AST] " + sig)
+                if include_signatures:
+                    sigs = signatures_map.get(current_path, [])
+                    extension = "    " if is_last else "│   "
+                    for j, sig in enumerate(sigs):
+                        sig_is_last = (j == len(sigs) - 1)
+                        sig_connector = "└── " if sig_is_last else "├── "
+                        lines.append(prefix + extension + sig_connector + "[AST] " + sig)
             else:
                 extension = "    " if is_last else "│   "
                 _build_lines(node[key], prefix + extension, current_path)

@@ -127,6 +127,7 @@ The `off` word is only consumed when it appears on its own immediately after the
 | `--exclude <dir...>` | Space-separated directory names to exclude from the scan. | none | -e |
 | `--batches <int>` | Number of batches to split large workspace context copies into. | 1 | -b |
 | `--file-culling`, `--file-cull` | Enable file culling and AST map generation mode. | false | none |
+| `--function-map` | Extract function and class signatures into the AST map (slow on large repos). | false | none |
 | `--prune` | Send context pruning instructions with the original system prompt. | false | none |
 | `--diff` | Inject current uncommitted git or TFS diff directly into the prompt context. | false | -d |
 
@@ -412,6 +413,7 @@ When any setting differs from its built-in default, a dim one-line banner names 
 | `divide` | on/off | off | Enable Large Task Mode |
 | `diff` | on/off | off | Inject the uncommitted git or TFS diff |
 | `file_culling` | on/off | off | Enable AST map generation |
+| `function_map` | on/off | off | Extract function and class signatures into the AST map |
 | `prune` | on/off | off | Send pruning instructions with the system prompt |
 | `select` | on/off | off | Launch the file selector TUI |
 | `auto` | on/off | off | Run the apply listener (`--apply`) |
